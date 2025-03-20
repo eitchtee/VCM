@@ -1,7 +1,0 @@
-{
-    "camera_toggle_hotkey": "<cmd>+<shift>+a",
-    "mic_toggle_hotkey": "<cmd>+<shift>+o",
-    "selected_camera_id": 0,
-    "enable_camera_function": true,
-    "enable_mic_function": true
-}
