@@ -30,7 +30,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name=f'VCM-v{get_version()}',
+    name=f'VCM-{get_version()}',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
