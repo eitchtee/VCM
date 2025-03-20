@@ -12,6 +12,13 @@ from pynput import keyboard
 from src.camera import CameraControl
 from src.config import Config
 from src.microphone import MicrophoneControl
+from src.version import __version__
+
+
+def resource_path(relative_path):
+    if hasattr(sys, "_MEIPASS"):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 
 
 class OSDDisplay:
@@ -32,8 +39,8 @@ class OSDDisplay:
         """Load icon images or create fallbacks if files not found"""
         icon_size = (12, 12)
 
-        camera_active_path = "resources/icons/camera_active.png"
-        camera_inactive_path = "resources/icons/camera_inactive.png"
+        camera_active_path = resource_path("resources/icons/camera_active.png")
+        camera_inactive_path = resource_path("resources/icons/camera_inactive.png")
 
         camera_active_img = Image.open(camera_active_path).resize(icon_size)
         camera_inactive_img = Image.open(camera_inactive_path).resize(icon_size)
@@ -41,8 +48,8 @@ class OSDDisplay:
         self.camera_active_icon = ImageTk.PhotoImage(camera_active_img)
         self.camera_inactive_icon = ImageTk.PhotoImage(camera_inactive_img)
 
-        mic_active_path = "resources/icons/mic_active.png"
-        mic_inactive_path = "resources/icons/mic_inactive.png"
+        mic_active_path = resource_path("resources/icons/mic_active.png")
+        mic_inactive_path = resource_path("resources/icons/mic_inactive.png")
 
         mic_active_img = Image.open(mic_active_path).resize(icon_size)
         mic_inactive_img = Image.open(mic_inactive_path).resize(icon_size)
@@ -198,7 +205,9 @@ class VCM:
         self.icon = None
         self.osd = OSDDisplay(self)
 
-        self.icon_img = Image.open("resources/logo.png")
+        self.icon_img = Image.open(resource_path("resources/logo.png"))
+
+        self.version = __version__
 
     def exit(self, icon, item):
         self.running = False
@@ -288,7 +297,9 @@ class VCM:
 
     def _setup_tray_icon(self):
         # Create the icon
-        self.icon = pystray.Icon("VCM", self.icon_img, "Video Conference Mute")
+        self.icon = pystray.Icon(
+            "VCM", self.icon_img, f"Video Conference Mute v{self.version}"
+        )
         # Set initial menu
         self.icon.menu = pystray.Menu(*self._get_menu_items())
         # Run the icon
