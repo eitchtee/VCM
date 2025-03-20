@@ -1,6 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 specpath = os.path.dirname(os.path.abspath(SPEC))
 
+def get_version():
+    # Read version from a version.py file (we'll create this)
+    version_dict = {}
+    with open("src/version.py") as f:
+        exec(f.read(), version_dict)
+    return version_dict['__version__']
+
 a = Analysis(
     ['src\\main.py'],
     pathex=[],
@@ -23,7 +30,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='VCM',
+    name=f'VCM-v{get_version()}',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

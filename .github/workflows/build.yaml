@@ -124,7 +124,6 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          dist/VCM-${{ steps.get_version.outputs.VERSION }}.zip
           dist/VCM-${{ steps.get_version.outputs.VERSION }}.exe
         tag_name: ${{ steps.get_version.outputs.TAG }}
       env:
