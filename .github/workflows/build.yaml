@@ -62,7 +62,7 @@ jobs:
       shell: pwsh
 
     - name: Build executable
-      run: python build.py
+      run: python pyinstaller build.spec
 
     - name: Check if release exists
       id: check_release
