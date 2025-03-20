@@ -4,6 +4,21 @@ on:
   release:
     types: [created]
 
+  # Manual trigger option
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to attach build to (e.g., v1.0.0)'
+        required: true
+      override_assets:
+        description: 'Override existing release assets'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
 jobs:
   build:
     name: Build Windows Executable
@@ -16,7 +31,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.12'
+        python-version: '3.10'
         cache: 'pip'
 
     - name: Install dependencies
@@ -24,10 +39,20 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Extract version from release
+    - name: Determine version and tag
       id: get_version
       run: |
-        $VERSION = "${{ github.event.release.tag_name }}" -replace "v", ""
+        # Determine the tag based on trigger source
+        if ("${{ github.event_name }}" -eq "release") {
+          $TAG = "${{ github.event.release.tag_name }}"
+        } else {
+          $TAG = "${{ github.event.inputs.release_tag }}"
+        }
+        
+        # Derive version from tag (remove 'v' prefix if present)
+        $VERSION = $TAG -replace "^v", ""
+        
+        echo "TAG=$TAG" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         echo "VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
       shell: pwsh
 
@@ -37,13 +62,70 @@ jobs:
       shell: pwsh
 
     - name: Build executable
-      run: python pyinstaller build.spec
+      run: python build.py
+
+    - name: Check if release exists
+      id: check_release
+      if: github.event_name == 'workflow_dispatch'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          try {
+            const tag = '${{ steps.get_version.outputs.TAG }}';
+            const release = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: tag
+            });
+            core.setOutput('exists', 'true');
+            return release.data.id;
+          } catch (error) {
+            core.setOutput('exists', 'false');
+            core.setFailed(`No release found with tag ${tag}: ${error.message}`);
+            return null;
+          }
+        result-encoding: string
+
+    - name: Delete existing assets if override requested
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.override_assets == 'true' && steps.check_release.outputs.exists == 'true'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const releaseId = '${{ steps.check_release.outputs.result }}';
+          if (!releaseId) return;
+          
+          const version = '${{ steps.get_version.outputs.VERSION }}';
+          const assetPatterns = [
+            `VCM-${version}.zip`,
+            `VCM-${version}.exe`
+          ];
+          
+          const assets = await github.rest.repos.listReleaseAssets({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            release_id: releaseId
+          });
+          
+          for (const asset of assets.data) {
+            for (const pattern of assetPatterns) {
+              if (asset.name.includes(pattern)) {
+                console.log(`Deleting existing asset: ${asset.name}`);
+                await github.rest.repos.deleteReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  asset_id: asset.id
+                });
+              }
+            }
+          }
 
     - name: Upload Release Assets
+      if: (github.event_name == 'release') || (github.event_name == 'workflow_dispatch' && steps.check_release.outputs.exists == 'true')
       uses: softprops/action-gh-release@v1
       with:
         files: |
+          dist/VCM-${{ steps.get_version.outputs.VERSION }}.zip
           dist/VCM-${{ steps.get_version.outputs.VERSION }}.exe
-        tag_name: ${{ github.event.release.tag_name }}
+        tag_name: ${{ steps.get_version.outputs.TAG }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
