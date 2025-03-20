@@ -18,25 +18,30 @@ class Config:
 
     def load(self) -> None:
         """Load configuration from file"""
-        try:
-            with open(self.filename, "r") as f:
-                config_data = json.load(f)
 
-                self.camera_toggle_hotkey = config_data.get(
-                    "camera_toggle_hotkey", "<cmd>+<shift>+a"
-                )
-                self.mic_toggle_hotkey = config_data.get(
-                    "mic_toggle_hotkey", "<cmd>+<shift>+o"
-                )
-                self.selected_camera_id = config_data.get("selected_camera_id", 0)
-                self.enable_camera_function = config_data.get(
-                    "enable_camera_function", True
-                )
-                self.enable_mic_function = config_data.get("enable_mic_function", True)
+        if not os.path.exists(self.filename):  # sane defaults
+            self.camera_toggle_hotkey = "<cmd>+<shift>+a"
+            self.mic_toggle_hotkey = "<cmd>+<shift>+o"
+            self.selected_camera_id = 0
+            self.enable_camera_function = True
+            self.enable_mic_function = True
 
-        except Exception as e:
-            print(f"Error loading config: {e}")
-            return None
+            self.save()
+        else:
+            try:
+                with open(self.filename, "r") as f:
+                    config_data = json.load(f)
+
+                    self.camera_toggle_hotkey = config_data.get("camera_toggle_hotkey")
+                    self.mic_toggle_hotkey = config_data.get("mic_toggle_hotkey")
+                    self.selected_camera_id = config_data.get("selected_camera_id")
+                    self.enable_camera_function = config_data.get(
+                        "enable_camera_function"
+                    )
+                    self.enable_mic_function = config_data.get("enable_mic_function")
+
+            except Exception as e:
+                print(f"Error loading config: {e}")
 
     def save(self) -> None:
         """Save configuration to file"""
