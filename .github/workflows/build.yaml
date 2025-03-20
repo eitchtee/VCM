@@ -1,0 +1,49 @@
+name: Build Release Assets
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build:
+    name: Build Windows Executable
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Extract version from release
+      id: get_version
+      run: |
+        $VERSION = "${{ github.event.release.tag_name }}" -replace "v", ""
+        echo "VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      shell: pwsh
+
+    - name: Update version file
+      run: |
+        echo "__version__ = '${{ steps.get_version.outputs.VERSION }}'" | Out-File -FilePath src/version.py -Encoding utf8
+      shell: pwsh
+
+    - name: Build executable
+      run: python pyinstaller build.spec
+
+    - name: Upload Release Assets
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          dist/VCM-${{ steps.get_version.outputs.VERSION }}.exe
+        tag_name: ${{ github.event.release.tag_name }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
