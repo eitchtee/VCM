@@ -1,0 +1,9 @@
+pystray~=0.19.5
+pillow~=11.1.0
+pynput~=1.8.0
+opencv-python~=4.11.0.86
+numpy~=2.2.3
+pyvirtualcam~=0.12.1
+comtypes~=1.4.10
+pycaw~=20240210
+pyinstaller~=6.12.0
