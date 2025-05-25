@@ -1,61 +1,106 @@
-import json
+import logging
+
+import yaml
 import os
 
+from microphone import get_mic_status
 
-class Config:
-    def __init__(self):
-        self.filename: str = "config.json"
 
-        self.camera_toggle_hotkey: str | None = None
-        self.mic_toggle_hotkey: str | None = None
-        self.selected_camera_id: int | None = None
+logger = logging.getLogger(__name__)
 
-        self.enable_camera_function: bool | None = None
-        self.enable_mic_function: bool | None = None
 
-        self.load()
-        self.save()
+class ConfigReader:
+    _instance = None
+    _config_file_name = "config.yml"  # Default config file name
 
-    def load(self) -> None:
-        """Load configuration from file"""
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super(ConfigReader, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
 
-        if not os.path.exists(self.filename):  # sane defaults
-            self.camera_toggle_hotkey = "<cmd>+<shift>+a"
-            self.mic_toggle_hotkey = "<cmd>+<shift>+o"
-            self.selected_camera_id = 0
-            self.enable_camera_function = True
-            self.enable_mic_function = True
+    def __init__(self, config_file_path=None):
+        if self._initialized:
+            return
+        self._initialized = True
 
-            self.save()
-        else:
-            try:
-                with open(self.filename, "r") as f:
-                    config_data = json.load(f)
+        # Determine config file path
+        # Priority: provided path > environment variable > default name
+        self._config_file_path = config_file_path
+        if self._config_file_path is None:
+            self._config_file_path = os.getenv(
+                "VCM_CONFIG_PATH", self._config_file_name
+            )
 
-                    self.camera_toggle_hotkey = config_data.get("camera_toggle_hotkey")
-                    self.mic_toggle_hotkey = config_data.get("mic_toggle_hotkey")
-                    self.selected_camera_id = config_data.get("selected_camera_id")
-                    self.enable_camera_function = config_data.get(
-                        "enable_camera_function"
-                    )
-                    self.enable_mic_function = config_data.get("enable_mic_function")
+        self.config_data = {}
+        self._load_config()
 
-            except Exception as e:
-                print(f"Error loading config: {e}")
+        # Set attributes directly for easier access
+        self.camera_hotkey = self.get("camera_hotkey")
+        self.mic_hotkey = self.get("mic_hotkey")
+        self.camera_id = self.get("camera_id")
+        self.camera_width = self.get("camera_width")
+        self.camera_height = self.get("camera_height")
+        self.camera_fps = self.get("camera_fps")
+        self.camera_status = False
 
-    def save(self) -> None:
-        """Save configuration to file"""
-
-        config_data = {
-            "camera_toggle_hotkey": self.camera_toggle_hotkey,
-            "mic_toggle_hotkey": self.mic_toggle_hotkey,
-            "selected_camera_id": self.selected_camera_id,
-            "enable_camera_function": self.enable_camera_function,
-            "enable_mic_function": self.enable_mic_function,
-        }
-
+        logger.info("Attempting to get initial microphone status for config...")
         try:
-            with open(self.filename, "w") as f:
-                json.dump(config_data, f, indent=4, ensure_ascii=False)
+            # Ensure this call happens after any necessary COM initialization if pycaw requires it
+            # on the main thread. For now, assuming microphone.py or pycaw handles it.
+            self.mic_active = get_mic_status()  # True if unmuted, False if muted/error
+            logger.info(
+                f"Config: Initial microphone status from system: {'Active (Unmuted)' if self.mic_active else 'Inactive (Muted)'}"
+            )
         except Exception as e:
-            print(f"Error saving config: {e}")
+            logger.error(
+                f"Config: Error getting initial mic status: {e}. Defaulting to False (Muted).",
+                exc_info=True,
+            )
+            self.mic_active = False
+
+        self.camera_active = True
+
+    def _load_config(self):
+        try:
+            with open(self._config_file_path, "r") as f:
+                self.config_data = yaml.safe_load(f)
+                if self.config_data is None:  # Handle empty YAML file
+                    self.config_data = {}
+                    print(f"Warning: Config file '{self._config_file_path}' is empty.")
+        except FileNotFoundError:
+            print(
+                f"Error: Config file '{self._config_file_path}' not found. Using default/empty values."
+            )
+            # Initialize with empty dict or default values if file not found
+            self.config_data = {}
+        except yaml.YAMLError as e:
+            print(f"Error parsing YAML in '{self._config_file_path}': {e}")
+            self.config_data = {}  # Or raise an exception / exit
+
+    def get(self, key, default=None):
+        """
+        Retrieves a configuration value by key.
+        Returns the default value if the key is not found.
+        """
+        return self.config_data.get(key, default)
+
+    def reload_config(self, config_file_path=None):
+        """
+        Reloads the configuration from the YAML file.
+        Can optionally specify a new path.
+        """
+        if config_file_path:
+            self._config_file_path = config_file_path
+        # Reset specific attributes
+        self._load_config()
+        self.camera_hotkey = self.get("camera_hotkey")
+        self.mic_hotkey = self.get("mic_hotkey")
+        self.camera_id = self.get("camera_id")
+        self.camera_width = self.get("camera_width")
+        self.camera_height = self.get("camera_height")
+        self.camera_fps = self.get("camera_fps")
+        # Or re-run the dynamic attribute setting if you chose that path
+
+    def __str__(self):
+        return f"ConfigReader(file='{self._config_file_path}', data={self.config_data})"

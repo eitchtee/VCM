@@ -1,0 +1,6 @@
+camera_hotkey: "<cmd>+<shift>+a"
+mic_hotkey: "<cmd>+<shift>+o"
+camera_id: 0 # Typically 0 for the default camera
+camera_width: 1280
+camera_height: 720
+camera_fps: 30
