@@ -64,28 +64,44 @@ jobs:
       id: prep_archive
       run: |
         $VERSION = "${{ steps.get_version.outputs.VERSION }}"
-        $PYINSTALLER_OUTPUT_DIR_NAME = "VCM-$VERSION" # Matches 'name' in COLLECT in build.spec
-        $PYINSTALLER_FULL_OUTPUT_PATH = "dist/$PYINSTALLER_OUTPUT_DIR_NAME"
-        $ARCHIVE_STAGING_DIR = "VCM_Release_Package" # Root folder inside the zip
+        # This is the directory name created by PyInstaller inside 'dist'
+        # e.g., if your .spec or command names the output 'VCM-1.0.0', this is it.
+        $PYINSTALLER_OUTPUT_DIR_NAME = "VCM-$VERSION"
+        # This is the full path to the PyInstaller output directory containing your app files
+        $PYINSTALLER_APP_CONTENT_SOURCE_PATH = "dist/$PYINSTALLER_OUTPUT_DIR_NAME"
+
+        $ARCHIVE_STAGING_DIR = "VCM_Release_Package" # Temporary directory for assembling ZIP contents
 
         New-Item -ItemType Directory -Force -Path $ARCHIVE_STAGING_DIR
-        
-        # Copy PyInstaller output (the entire application folder)
-        Write-Host "Copying PyInstaller output from $PYINSTALLER_FULL_OUTPUT_PATH to $ARCHIVE_STAGING_DIR/$PYINSTALLER_OUTPUT_DIR_NAME"
-        New-Item -ItemType Directory -Force -Path "$ARCHIVE_STAGING_DIR/$PYINSTALLER_OUTPUT_DIR_NAME"
-        Copy-Item -Path "$PYINSTALLER_FULL_OUTPUT_PATH/*" -Destination "$ARCHIVE_STAGING_DIR/$PYINSTALLER_OUTPUT_DIR_NAME/" -Recurse -Force
-        
-        # Copy example config file to the root of the package
-        Write-Host "Copying config.yml as config.yml"
-        Copy-Item -Path "src/config.yml" -Destination "$ARCHIVE_STAGING_DIR/config.yml" -Force
-        
-        $ARTIFACTS_SOURCE_PATH = "packaging-artifacts/"
 
-        if (Test-Path $ARTIFACTS_SOURCE_PATH) {
-          Write-Host "Copying $ARTIFACTS_SOURCE_PATH to $ARCHIVE_STAGING_DIR"
-          New-Item -ItemType Directory -Force -Path $ARTIFACTS_SOURCE_PATH
-          Copy-Item -Path "$ARTIFACTS_SOURCE_PATH/*" -Destination "$ARCHIVE_STAGING_DIR/" -Recurse -Force
+        # Copy CONTENTS of PyInstaller output folder (e.g., YourApp.exe, _internal, dlls)
+        # directly into the root of the staging directory.
+        Write-Host "Copying contents of PyInstaller output from '$PYINSTALLER_APP_CONTENT_SOURCE_PATH/*' to '$ARCHIVE_STAGING_DIR/'"
+        if (Test-Path "$PYINSTALLER_APP_CONTENT_SOURCE_PATH") {
+          if ((Get-ChildItem -Path $PYINSTALLER_APP_CONTENT_SOURCE_PATH).Count -gt 0) {
+            Copy-Item -Path "$PYINSTALLER_APP_CONTENT_SOURCE_PATH/*" -Destination "$ARCHIVE_STAGING_DIR/" -Recurse -Force
+          } else {
+            Write-Warning "PyInstaller output directory '$PYINSTALLER_APP_CONTENT_SOURCE_PATH' is empty."
+            # Decide if this is an error or can be skipped depending on your build
+          }
+        } else {
+          Write-Error "PyInstaller output directory '$PYINSTALLER_APP_CONTENT_SOURCE_PATH' not found."
+          exit 1
         }
+
+        # Copy example config file to the root of the staging directory
+        Write-Host "Copying 'src/config.yml' to '$ARCHIVE_STAGING_DIR/config.yml'"
+        Copy-Item -Path "src/config.yml" -Destination "$ARCHIVE_STAGING_DIR/config.yml" -Force
+
+        $PACKAGING_ARTIFACTS_SOURCE_DIR = "packaging-artifacts" # Source folder in repo
+
+        if (Test-Path $PACKAGING_ARTIFACTS_SOURCE_DIR) {
+          Write-Host "Copying contents of '$PACKAGING_ARTIFACTS_SOURCE_DIR/*' directly into '$ARCHIVE_STAGING_DIR/'"
+          Copy-Item -Path "$PACKAGING_ARTIFACTS_SOURCE_DIR/*" -Destination "$ARCHIVE_STAGING_DIR/" -Recurse -Force
+        } else {
+          Write-Host "'$PACKAGING_ARTIFACTS_SOURCE_DIR' not found, skipping."
+        }
+
         echo "ARCHIVE_CONTENT_PATH=$ARCHIVE_STAGING_DIR" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
       shell: pwsh
 
