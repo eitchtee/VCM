@@ -30,7 +30,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: '3.12'
         cache: 'pip'
 
     - name: Install dependencies
@@ -107,7 +107,7 @@ jobs:
     - name: Check if release exists
       id: check_release
       if: github.event_name == 'workflow_dispatch'
-      uses: actions/github-script@v7 # Updated to v7
+      uses: actions/github-script@v7
       with:
         script: |
           try {
@@ -118,12 +118,11 @@ jobs:
               tag: tag
             });
             core.setOutput('exists', 'true');
-            core.setOutput('release_id', release.data.id.toString()); // Ensure release_id is string
-            // return release.data.id; // No need to return, output is set
+            return release.data.id;
           } catch (error) {
             core.setOutput('exists', 'false');
-            // Only fail if tag is truly expected to exist, for manual dispatch maybe just warn
-            core.warning(`No release found with tag ${tag}: ${error.message}`);
+            core.setFailed(`No release found with tag ${tag}: ${error.message}`);
+            return null;
           }
         result-encoding: string
 
@@ -165,7 +164,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          dist/VCM-${{ steps.get_version.outputs.VERSION }}.zip
+          dist/VCM-${{ steps.get_version.outputs.VERSION }}-x64.zip
         tag_name: ${{ steps.get_version.outputs.TAG }}
         # fail_on_unmatched_files: true # Optional: fail if files glob doesn't find anything
       env:
