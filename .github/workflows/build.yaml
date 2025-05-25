@@ -93,7 +93,7 @@ jobs:
       run: |
         $VERSION = "${{ steps.get_version.outputs.VERSION }}"
         $ARCHIVE_CONTENT_PATH = "${{ steps.prep_archive.outputs.ARCHIVE_CONTENT_PATH }}"
-        $ZIP_FILE_NAME = "dist/VCM-${VERSION}.zip" # Output zip to dist/
+        $ZIP_FILE_NAME = "VCM/dist/VCM-${VERSION}-x64.zip" # Output zip to dist/
         
         # Powershell's Compress-Archive creates a top-level folder in the zip from the source.
         # To get the desired structure (contents of $ARCHIVE_CONTENT_PATH directly at zip root):
