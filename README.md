@@ -1,8 +1,10 @@
 # VCM - Video Conference Mute
 
-**A utility to quickly mute/unmute your microphone and enable/disable your camera feed via global hotkeys, with a persistent on-screen display for status and a virtual camera output.**
+**A utility to quickly mute/unmute your microphone and enable/disable your camera feed via global hotkeys, with a persistent on-screen display for status.**
 
 VCM enhances your video conferencing experience by providing rapid, system-wide control over your microphone and camera, ensuring you're only seen and heard when you intend to be.
+
+This is an alternative to the removed Powertoys' feature Video Conference Mute.
 
 ## Overview
 
@@ -29,63 +31,24 @@ In the age of constant video calls, fumbling for mute buttons or camera toggles 
 
 ## Getting Started
 
-### Prerequisites
+### Installation
 
-* **Python 3.7+**
-* **Windows Operating System**: Currently, VCM is primarily designed for Windows due to some specific libraries used (e.g., `pycaw` for microphone control, `cv2.CAP_DSHOW` for camera).
-* **`softcam` Virtual Camera Backend**:
-    * This project relies on a virtual camera backend library. The code in `camera.py` is set up to import it as `from x64.Release import softcam`.
-    * You will need to have this specific module available or adapt `camera.py` to use another virtual camera library like `pyvirtualcam`.
-    * If the specified `softcam` module is not found, VCM will run with a **mock camera backend**, which simulates virtual camera behavior for testing the application's UI and logic but won't produce an actual virtual camera device.
-* **Physical Webcam**: Required for the camera feed feature.
+1. Download the zipped file from [latest release](https://github.com/eitchtee/VCM/releases/latest)
+2. Unzip the files to where you want VCM to be
+3. [Edit config.yml](#configuration-details)
+4. Run `RegisterSoftcam.bat`, Windows will ask for administrative rights, allow it.
+5. Launch `VCM.exe`
 
-### Installation & Setup
+#### Softcam
 
-1.  **Clone or Download:**
-    ```bash
-    # If you have git installed
-    git clone [https://github.com/yourusername/VCM.git](https://github.com/yourusername/VCM.git)
-    cd VCM
-    # Otherwise, download and extract the ZIP file.
-    ```
+VCM comes bundled with pre-built [softcam's](https://github.com/tshino/softcam) dll and python bindings for Windows x64, you can also compile your own version and replace the files inside `<your vcm folder>/_internal/softcam/`
 
-2.  **Install Dependencies:**
-    It's recommended to use a virtual environment.
-    ```bash
-    python -m venv venv
-    # On Windows
-    venv\Scripts\activate
-    # On macOS/Linux
-    # source venv/bin/activate
 
-    pip install -r requirements.txt
-    ```
-    If `requirements.txt` is not provided, install manually:
-    ```bash
-    pip install PyYAML pynput Pillow pystray opencv-python pycaw comtypes
-    ```
+### Unninstall
 
-3.  **Prepare Resources:**
-    * **OSD Icons**: Create the following folder structure and place your 16x16 (or similar small size) PNG icons inside:
-        ```
-        VCM/
-        ├── resources/
-        │   └── icons/
-        │       ├── camera_active.png
-        │       ├── camera_inactive.png
-        │       ├── mic_active.png
-        │       └── mic_inactive.png
-        ```
-        If icons are missing, the OSD will display placeholder colored squares.
-    * **System Tray Icon**: Place a `icon.png` (e.g., 64x64 pixels) in the root `VCM/` directory. A placeholder will be used if not found.
+1. Run `UnregisterSoftcam.bat`, Windows will ask for administrative rights, allow it.
+2. Delete VCM's folder
 
-4.  **Configure `config.yaml`:**
-    Create a `config.yaml` file in the root `VCM/` directory. See the [Configuration Details](#configuration-details) section below for an example and explanations.
-
-5.  **Run VCM:**
-    ```bash
-    python main.py
-    ```
 
 ## How to Use
 
@@ -96,7 +59,7 @@ In the age of constant video calls, fumbling for mute buttons or camera toggles 
     * The OSD will appear in the bottom-right of your screen whenever your microphone is muted OR your camera feed is set to "disabled" (black screen).
     * It shows the current status of both the camera and microphone using icons.
 * **Virtual Camera**:
-    * In your video conferencing application (Zoom, OBS, Google Meet, etc.), select "VCM Virtual Camera" (or the name configured in `camera.py`) as your video source.
+    * In your video conferencing application (Zoom, OBS, Google Meet, etc.), select "VCM" as your video source.
     * VCM will automatically start feeding video (or a black screen) when the application starts using the virtual camera.
     * The physical webcam light should turn on/off as VCM acquires/releases it based on usage.
 * **System Tray Icon**:
@@ -105,7 +68,7 @@ In the age of constant video calls, fumbling for mute buttons or camera toggles 
 
 ## Configuration Details
 
-Create a `config.yaml` file in the same directory as `main.py`. You can also set the `VCM_CONFIG_PATH` environment variable to point to a custom location for `config.yaml`.
+Edit the pre-bundled `config.yaml` file in your VCM folder.
 
 **Example `config.yaml`:**
 
@@ -113,10 +76,11 @@ Create a `config.yaml` file in the same directory as `main.py`. You can also set
 # Hotkey to toggle the camera feed (webcam vs. black screen)
 # Format: Modifiers (Ctrl, Alt, Shift, Win/Cmd) + Key (e.g., C, M, F1)
 # Ensure these are not commonly used by other applications or your OS.
-camera_hotkey: "Ctrl+Shift+C"
+# Have a look at https://pynput.readthedocs.io/en/latest/keyboard.html#pynput.keyboard.Key for available modifiers
 
-# Hotkey to toggle the system microphone mute state
-mic_hotkey: "Ctrl+Shift+M"
+camera_hotkey: "<cmd>+<shift>+a"
+# Hotkey to toggle the system microphone mute state. Same rules as camera_hotkey
+mic_hotkey: "<cmd>+<shift>+o"
 
 # --- Camera Settings ---
 # ID of the physical webcam to use.
