@@ -4,7 +4,6 @@ on:
   release:
     types: [created]
 
-  # Manual trigger option
   workflow_dispatch:
     inputs:
       release_tag:
@@ -21,15 +20,15 @@ on:
 
 jobs:
   build:
-    name: Build Windows Executable
+    name: Build Windows Executable and Archive
     runs-on: windows-latest
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
         cache: 'pip'
@@ -38,36 +37,77 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install pyinstaller
 
     - name: Determine version and tag
       id: get_version
       run: |
-        # Determine the tag based on trigger source
         if ("${{ github.event_name }}" -eq "release") {
           $TAG = "${{ github.event.release.tag_name }}"
         } else {
           $TAG = "${{ github.event.inputs.release_tag }}"
         }
-        
-        # Derive version from tag (remove 'v' prefix if present)
         $VERSION = $TAG -replace "^v", ""
-        
         echo "TAG=$TAG" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
         echo "VERSION=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
       shell: pwsh
 
-    - name: Update version file
+    - name: Update version file (src/version.py)
       run: |
         echo "__version__ = '${{ steps.get_version.outputs.VERSION }}'" | Out-File -FilePath src/version.py -Encoding utf8
       shell: pwsh
 
-    - name: Build executable
+    - name: Build application (one-dir)
       run: pyinstaller build.spec
+
+    - name: Prepare files for archive
+      id: prep_archive
+      run: |
+        $VERSION = "${{ steps.get_version.outputs.VERSION }}"
+        $PYINSTALLER_OUTPUT_DIR_NAME = "VCM-$VERSION" # Matches 'name' in COLLECT in build.spec
+        $PYINSTALLER_FULL_OUTPUT_PATH = "dist/$PYINSTALLER_OUTPUT_DIR_NAME"
+        $ARCHIVE_STAGING_DIR = "VCM_Release_Package" # Root folder inside the zip
+
+        New-Item -ItemType Directory -Force -Path $ARCHIVE_STAGING_DIR
+        
+        # Copy PyInstaller output (the entire application folder)
+        Write-Host "Copying PyInstaller output from $PYINSTALLER_FULL_OUTPUT_PATH to $ARCHIVE_STAGING_DIR/$PYINSTALLER_OUTPUT_DIR_NAME"
+        New-Item -ItemType Directory -Force -Path "$ARCHIVE_STAGING_DIR/$PYINSTALLER_OUTPUT_DIR_NAME"
+        Copy-Item -Path "$PYINSTALLER_FULL_OUTPUT_PATH/*" -Destination "$ARCHIVE_STAGING_DIR/$PYINSTALLER_OUTPUT_DIR_NAME/" -Recurse -Force
+        
+        # Copy example config file to the root of the package
+        Write-Host "Copying config.yml as config.yml"
+        Copy-Item -Path "src/config.yml" -Destination "$ARCHIVE_STAGING_DIR/config.yml" -Force
+        
+        $ARTIFACTS_SOURCE_PATH = "packaging-artifacts/"
+
+        if (Test-Path $ARTIFACTS_SOURCE_PATH) {
+          Write-Host "Copying $ARTIFACTS_SOURCE_PATH to $ARCHIVE_STAGING_DIR"
+          New-Item -ItemType Directory -Force -Path $ARTIFACTS_SOURCE_PATH
+          Copy-Item -Path "$ARTIFACTS_SOURCE_PATH/*" -Destination "$ARCHIVE_STAGING_DIR/" -Recurse -Force
+        }
+        echo "ARCHIVE_CONTENT_PATH=$ARCHIVE_STAGING_DIR" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      shell: pwsh
+
+    - name: Create ZIP archive
+      run: |
+        $VERSION = "${{ steps.get_version.outputs.VERSION }}"
+        $ARCHIVE_CONTENT_PATH = "${{ steps.prep_archive.outputs.ARCHIVE_CONTENT_PATH }}"
+        $ZIP_FILE_NAME = "dist/VCM-${VERSION}.zip" # Output zip to dist/
+        
+        # Powershell's Compress-Archive creates a top-level folder in the zip from the source.
+        # To get the desired structure (contents of $ARCHIVE_CONTENT_PATH directly at zip root):
+        Push-Location $ARCHIVE_CONTENT_PATH
+        Compress-Archive -Path "./*" -DestinationPath "../../$ZIP_FILE_NAME" -Force # Go up two levels to place zip in dist/
+        Pop-Location
+        
+        Write-Host "Created $ZIP_FILE_NAME"
+      shell: pwsh
 
     - name: Check if release exists
       id: check_release
       if: github.event_name == 'workflow_dispatch'
-      uses: actions/github-script@v6
+      uses: actions/github-script@v7 # Updated to v7
       with:
         script: |
           try {
@@ -78,53 +118,54 @@ jobs:
               tag: tag
             });
             core.setOutput('exists', 'true');
-            return release.data.id;
+            core.setOutput('release_id', release.data.id.toString()); // Ensure release_id is string
+            // return release.data.id; // No need to return, output is set
           } catch (error) {
             core.setOutput('exists', 'false');
-            core.setFailed(`No release found with tag ${tag}: ${error.message}`);
-            return null;
+            // Only fail if tag is truly expected to exist, for manual dispatch maybe just warn
+            core.warning(`No release found with tag ${tag}: ${error.message}`);
           }
         result-encoding: string
 
     - name: Delete existing assets if override requested
       if: github.event_name == 'workflow_dispatch' && github.event.inputs.override_assets == 'true' && steps.check_release.outputs.exists == 'true'
-      uses: actions/github-script@v6
+      uses: actions/github-script@v7 # Updated to v7
       with:
         script: |
-          const releaseId = '${{ steps.check_release.outputs.result }}';
-          if (!releaseId) return;
+          const releaseId = steps.check_release.outputs.release_id; // Use output correctly
+          if (!releaseId || releaseId === '') {
+            console.log('No release ID found, skipping asset deletion.');
+            return;
+          }
           
           const version = '${{ steps.get_version.outputs.VERSION }}';
-          const assetPatterns = [
-            `VCM-${version}.zip`,
-            `VCM-${version}.exe`
-          ];
+          // Ensure this matches the ZIP file name and any other assets you might manage
+          const assetName = `VCM-${version}.zip`; 
           
           const assets = await github.rest.repos.listReleaseAssets({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            release_id: releaseId
+            release_id: parseInt(releaseId) // Convert to int
           });
           
           for (const asset of assets.data) {
-            for (const pattern of assetPatterns) {
-              if (asset.name.includes(pattern)) {
-                console.log(`Deleting existing asset: ${asset.name}`);
-                await github.rest.repos.deleteReleaseAsset({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  asset_id: asset.id
-                });
-              }
+            if (asset.name === assetName) { // Exact match for the zip
+              console.log(`Deleting existing asset: ${asset.name}`);
+              await github.rest.repos.deleteReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                asset_id: asset.id
+              });
             }
           }
 
-    - name: Upload Release Assets
+    - name: Upload Release Asset (ZIP Archive)
       if: (github.event_name == 'release') || (github.event_name == 'workflow_dispatch' && steps.check_release.outputs.exists == 'true')
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         files: |
-          dist/VCM-${{ steps.get_version.outputs.VERSION }}.exe
+          dist/VCM-${{ steps.get_version.outputs.VERSION }}.zip
         tag_name: ${{ steps.get_version.outputs.TAG }}
+        # fail_on_unmatched_files: true # Optional: fail if files glob doesn't find anything
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

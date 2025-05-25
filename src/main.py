@@ -1,363 +1,328 @@
+import logging
+from logging.handlers import RotatingFileHandler
+
 import os
 import sys
 import threading
-import time
-import tkinter as tk
-from queue import Queue
 
-import pystray
-from PIL import Image, ImageDraw, ImageTk
+if hasattr(sys, "_MEIPASS"):
+    # Running in a PyInstaller bundle, place logs next to the executable
+    log_dir = os.path.dirname(sys.executable)
+else:
+    # Running as a script, place logs in the script's directory
+    log_dir = os.path.abspath(os.path.dirname(__file__))
+
+log_file_path = os.path.join(log_dir, "vcm_app.log")
+
+# Log rotation parameters
+max_log_size_bytes = 1 * 1024 * 1024  # 1 MB per log file
+backup_log_count = (
+    3  # Number of backup files to keep (e.g., vcm_app.log, vcm_app.log.1, ... .3)
+)
+
+# Get the root logger instance
+# All loggers created with logging.getLogger(__name__) will inherit this configuration
+root_logger = logging.getLogger()
+root_logger.setLevel(
+    logging.INFO
+)  # Set the desired logging level (e.g., INFO or DEBUG)
+
+# Clear any existing handlers from the root logger to avoid duplicate logs
+# or conflicts if basicConfig was called by a library (though unlikely for root).
+if root_logger.hasHandlers():
+    root_logger.handlers.clear()
+
+# Create a rotating file handler
+# This handler writes to `log_file_path`. When the file reaches `maxBytes`,
+# it's renamed (e.g., to vcm_app.log.1), and a new `vcm_app.log` is started.
+# `backupCount` determines how many old log files are kept.
+try:
+    rotating_file_handler = RotatingFileHandler(
+        filename=log_file_path,
+        maxBytes=max_log_size_bytes,
+        backupCount=backup_log_count,
+        encoding="utf-8",  # Explicitly set encoding for cross-platform compatibility
+    )
+except PermissionError:
+    # Fallback in case of permission issues (e.g., running from a restricted directory)
+    # Try logging to a user's temp directory as a last resort for this session.
+    # This is a basic fallback; more robust error handling might be needed for production.
+    import tempfile
+
+    fallback_log_dir = tempfile.gettempdir()
+    log_file_path = os.path.join(fallback_log_dir, "vcm_app_fallback.log")
+    rotating_file_handler = RotatingFileHandler(
+        filename=log_file_path,
+        maxBytes=max_log_size_bytes,
+        backupCount=backup_log_count,
+        encoding="utf-8",
+    )
+    logging.warning(
+        f"Original log path had permission issues. Logging to fallback: {log_file_path}"
+    )
+
+
+# Define the log message format
+log_formatter = logging.Formatter(
+    "%(asctime)s - %(threadName)s - [%(name)s:%(lineno)d] - %(levelname)s - %(message)s"
+)
+rotating_file_handler.setFormatter(log_formatter)
+
+# Add the configured rotating file handler to the root logger
+root_logger.addHandler(rotating_file_handler)
+
+# Optional: If you ALSO want console output during development (in addition to the file)
+# uncomment the following lines:
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.DEBUG)  # Set level for console output if different
+console_handler.setFormatter(log_formatter)  # Use the same or a different formatter
+root_logger.addHandler(console_handler)
+
 from pynput import keyboard
+from PIL import Image, ImageDraw  # Still needed for pystray
+import pystray
+from pystray import MenuItem as item
 
-from src.camera import CameraControl
-from src.config import Config
-from src.microphone import MicrophoneControl
-from src.version import __version__
+from config import ConfigReader
+from microphone import (
+    set_mic_mute as system_set_mic_mute,
+    get_mic_status as get_system_mic_status,
+)
+from camera import CameraManager
+from osd import OSDDisplay  # Import the new OSD class
+
+from utils.resources import resource_path
 
 
-def resource_path(relative_path):
-    if hasattr(sys, "_MEIPASS"):
-        return os.path.join(sys._MEIPASS, relative_path)
-    return os.path.join(os.path.abspath("."), relative_path)
+logger = logging.getLogger(__name__)  # Get a logger for main.py scope
 
 
-class OSDDisplay:
-    def __init__(self, parent):
-        self.parent = parent
-        self.window = None
-        self.visible = False
-        self.update_queue = Queue()
-        self.running = False
+# --- Global Variables ---
+config = None
+hotkey_listener = None
+tray_icon_instance = None
+osd_manager = None
+camera_manager = None
+exit_event = threading.Event()  # For gracefully exiting the main thread
 
-        self.bg_color = "#1E1E1E"  # Dark modern background
 
-    def start(self):
-        """Start the OSD in its own thread"""
-        threading.Thread(target=self._run_osd_loop, daemon=True).start()
+# --- Configuration Loading --- (same as before)
+def load_configuration():
+    global config
+    config = ConfigReader()
+    logger.info("Configuration loaded in main.")
+    # Log specific config details if needed for debugging
+    logger.debug(
+        f"Camera Hotkey: {config.camera_hotkey}, Mic Hotkey: {config.mic_hotkey}"
+    )
+    logger.debug(
+        f"Initial states: CameraActive={config.camera_active}, MicActive={config.mic_active}"
+    )
 
-    def _load_icons(self):
-        """Load icon images or create fallbacks if files not found"""
-        icon_size = (12, 12)
 
-        camera_active_path = resource_path("resources/icons/camera_active.png")
-        camera_inactive_path = resource_path("resources/icons/camera_inactive.png")
+# --- Hotkey Processing Functions ---
+def on_camera_hotkey_press():
+    """Placeholder for camera hotkey - Toggles config.camera_active."""
+    if config is None:
+        logger.error("Config not loaded, cannot toggle camera.")
+        if osd_manager:
+            osd_manager.update()  # Still update OSD to show error potentially
+        return
 
-        camera_active_img = Image.open(camera_active_path).resize(icon_size)
-        camera_inactive_img = Image.open(camera_inactive_path).resize(icon_size)
+    config.camera_active = not config.camera_active
+    status_message = "Camera ON" if config.camera_active else "Camera OFF"
+    logger.info(f"Camera hotkey pressed. New placeholder state: {status_message}")
 
-        self.camera_active_icon = ImageTk.PhotoImage(camera_active_img)
-        self.camera_inactive_icon = ImageTk.PhotoImage(camera_inactive_img)
+    if osd_manager:
+        osd_manager.update()  # Trigger OSD update
 
-        mic_active_path = resource_path("resources/icons/mic_active.png")
-        mic_inactive_path = resource_path("resources/icons/mic_inactive.png")
 
-        mic_active_img = Image.open(mic_active_path).resize(icon_size)
-        mic_inactive_img = Image.open(mic_inactive_path).resize(icon_size)
+def on_mic_hotkey_press():  # (Updated version from previous step, ensure it's this one)
+    if config is None:
+        logger.error("Configuration not loaded, cannot toggle microphone.")
+        if osd_manager:
+            osd_manager.update()
+        return
 
-        self.mic_active_icon = ImageTk.PhotoImage(mic_active_img)
-        self.mic_inactive_icon = ImageTk.PhotoImage(mic_inactive_img)
+    logger.info(
+        f"Mic hotkey ({config.mic_hotkey}) pressed. "
+        f"Current config.mic_active: {'Active' if config.mic_active else 'Inactive'}"
+    )
+    should_os_mic_be_muted = config.mic_active
+    success = system_set_mic_mute(should_os_mic_be_muted)
 
-    def _run_osd_loop(self):
-        """Run the tkinter main loop in its own thread"""
-        self.window = tk.Tk()
-        self.window.overrideredirect(True)  # Remove window decorations
-        self.window.attributes("-topmost", True)  # Keep on top
-        self.window.attributes("-alpha", 0.8)  # Make it semi-transparent
-
-        # Load icons
-        self._load_icons()
-
-        # Create the main frame
-        self.frame = tk.Frame(self.window, bg=self.bg_color, padx=12, pady=8)
-        self.frame.pack()
-
-        # Create icons container
-        self.icons_frame = tk.Frame(self.frame, bg=self.bg_color)
-        self.icons_frame.pack(pady=2)
-
-        # Create and place camera icon
-        self.camera_label = tk.Label(
-            self.icons_frame, image=self.camera_inactive_icon, bg=self.bg_color
+    if success:
+        config.mic_active = not config.mic_active
+        new_status_message = "Microphone ON" if config.mic_active else "Microphone OFF"
+        logger.info(
+            f"OS mic state changed. New config.mic_active: {new_status_message}"
         )
-        self.camera_label.pack(side=tk.LEFT, padx=(0, 5))
-
-        # Create separator
-        self.separator = tk.Frame(self.icons_frame, width=1, bg="#555555")
-        self.separator.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=2)
-
-        # Create and place microphone icon
-        self.mic_label = tk.Label(
-            self.icons_frame, image=self.mic_inactive_icon, bg=self.bg_color
-        )
-        self.mic_label.pack(side=tk.LEFT, padx=(5, 0))
-
-        # Position window in bottom right
-        self._position_window()
-
-        # Make window appear without being clickable
-        self.window.lift()
-
-        # Hide window initially
-        self.window.withdraw()
-        self.visible = False
-
-        # Start the update checking
-        self.running = True
-        self._check_for_updates()
-
-        # Start tkinter main loop
-        self.window.mainloop()
-
-    def _position_window(self):
-        """Position the window in bottom right corner"""
-        screen_width = self.window.winfo_screenwidth()
-        screen_height = self.window.winfo_screenheight()
-
-        # Get window size
-        self.window.update_idletasks()
-        width = self.frame.winfo_reqwidth() + 20  # Add padding
-        height = self.frame.winfo_reqheight() + 20
-
-        # Position in bottom right with some padding
-        x = screen_width - width - 20
-        y = screen_height - height - 20
-        self.window.geometry(f"+{x}+{y}")
-
-    def _check_for_updates(self):
-        """Check for update requests in the queue"""
-        if not self.running and self.update_queue.empty():
-            return
-
-        # Process all updates in the queue
-        while not self.update_queue.empty():
-            update_fn = self.update_queue.get()
-            update_fn()
-
-        # Schedule next check
-        self.window.after(100, self._check_for_updates)
-
-    def update(self):
-        """Queue an update to be processed by the tkinter thread"""
-        if not self.running:
-            return
-
-        # Create a function for the update that will be executed in the tkinter thread
-        def do_update():
-            # Get current states
-            camera_active = self.parent.camera.camera_active
-            mic_active = self.parent.mic.is_active
-            should_display = camera_active or mic_active
-
-            if should_display:
-                # Update icons based on current state
-                if camera_active:
-                    self.camera_label.config(image=self.camera_active_icon)
-                else:
-                    self.camera_label.config(image=self.camera_inactive_icon)
-
-                if mic_active:
-                    self.mic_label.config(image=self.mic_active_icon)
-                else:
-                    self.mic_label.config(image=self.mic_inactive_icon)
-
-                # Show the window if it's not already visible
-                if not self.visible:
-                    self.window.deiconify()
-                    self.visible = True
-                    self._position_window()  # Reposition when showing
-            else:
-                # Hide the window if it's currently visible
-                if self.visible:
-                    self.window.withdraw()
-                    self.visible = False
-
-        # Add the update function to the queue
-        self.update_queue.put(do_update)
-
-    def close(self):
-        """Shut down the OSD"""
-        self.running = False
-
-        # Schedule window destruction in tkinter thread
-        def do_close():
-            if self.window:
-                self.window.quit()
-                self.window.destroy()
-
-        self.update_queue.put(do_close)
-
-
-class VCM:
-    def __init__(self):
-        self.running = True
-        self.paused = False
-
-        self.config = Config()
-
-        self.camera = CameraControl(selected_camera_id=self.config.selected_camera_id)
-        self.mic = MicrophoneControl()
-
-        self.hotkey_mappings = {}
-        self.hotkey_listener = None
-
-        self.action_queue = Queue()
-
-        self.icon = None
-        self.osd = OSDDisplay(self)
-
-        self.icon_img = Image.open(resource_path("resources/logo.png"))
-
-        self.version = __version__
-
-    def exit(self, icon, item):
-        self.running = False
-
-    def start(self):
-        # Start the OSD
-        self.osd.start()
-        # Wait a moment for the OSD to initialize
-        time.sleep(0.5)
-
-        # Start camera and hotkeys
-        self._start_hotkeys()
-        self.camera.start()
-
-        # Start the icon in a separate thread
-        icon_thread = threading.Thread(target=self._setup_tray_icon, daemon=True)
-        icon_thread.start()
-
-        # Update OSD with initial state
-        self.osd.update()
-
-        # Main loop processes events from queue
-        while self.running:
-            self._process_queue()
-            time.sleep(0.01)
-
-        print("Cleaning up...")
-        self.camera.stop()
-        self.hotkey_listener.stop()
-        self.osd.close()
-        self.icon.stop()
-
-    def pause(self):
-        print("Pausing...")
-        self.camera.stop()
-        self.hotkey_listener.stop()
-        self.osd.close()
-        self.paused = True
-
-        if self.icon:
-            self.icon.menu = pystray.Menu(*self._get_menu_items())
-
-    def unpause(self):
-        print("Unpausing...")
-        self._start_hotkeys()
-        self.camera.start()
-        self.osd.start()
-        self.paused = False
-
-        if self.icon:
-            self.icon.menu = pystray.Menu(*self._get_menu_items())
-
-    def _get_menu_items(self):
-        menu = []
-
-        if not self.paused:
-            if self.config.enable_camera_function:
-                menu.append(
-                    pystray.MenuItem(
-                        "Camera",
-                        self._toggle_camera,
-                        checked=lambda _: self.camera.camera_active,
-                    ),
-                )
-            if self.config.enable_mic_function:
-                menu.append(
-                    pystray.MenuItem(
-                        "Microphone",
-                        self._toggle_mic,
-                        checked=lambda _: self.mic.is_active,
-                    ),
-                )
-
-        menu.append(
-            pystray.MenuItem(
-                "Pause",
-                self.pause if not self.paused else self.unpause,
-                checked=lambda _: self.paused,
-            ),
-        )
-
-        menu.append(
-            pystray.MenuItem("Exit", self.exit),
-        )
-
-        return menu
-
-    def _setup_tray_icon(self):
-        # Create the icon
-        self.icon = pystray.Icon(
-            "VCM", self.icon_img, f"Video Conference Mute v{self.version}"
-        )
-        # Set initial menu
-        self.icon.menu = pystray.Menu(*self._get_menu_items())
-        # Run the icon
-        self.icon.run()
-
-    def _start_hotkeys(self):
-        print("Starting hotkeys...")
-        if self.config.enable_mic_function:
-            self.hotkey_mappings[self.config.mic_toggle_hotkey] = (
-                self._enqueue_toggle_mic
+    else:
+        logger.error("Failed to change OS mic state.")
+        # Re-sync config with actual system state on failure
+        actual_system_status_active = get_system_mic_status()
+        if config.mic_active != actual_system_status_active:
+            logger.warning(
+                f"Config mic state out of sync. Correcting. System: {'Active' if actual_system_status_active else 'Inactive'}"
             )
-        if self.config.enable_camera_function:
-            self.hotkey_mappings[self.config.camera_toggle_hotkey] = (
-                self._enqueue_toggle_camera
-            )
-        self.hotkey_listener = keyboard.GlobalHotKeys(self.hotkey_mappings)
-        self.hotkey_listener.start()
+            config.mic_active = actual_system_status_active
 
-    def _enqueue_toggle_camera(self):
-        # Add action to queue for the main thread
-        self.action_queue.put(lambda: self._toggle_camera())
+    if osd_manager:
+        osd_manager.update()  # Trigger OSD update
 
-    def _enqueue_toggle_mic(self):
-        # Add action to queue for the main thread
-        self.action_queue.put(lambda: self._toggle_mic())
 
-    def _toggle_camera(self):
-        if self.camera.camera_active:
-            print("Camera deactivated")
+def format_hotkey_for_pynput(hotkey_str):  # (same as before)
+    # ... (implementation from previous steps)
+    if not hotkey_str:
+        return None
+    parts = hotkey_str.lower().split("+")
+    formatted_parts = []
+    for part_original in parts:
+        part = part_original.strip()
+        if part in ["ctrl", "alt", "shift", "cmd", "win", "super", "control"]:
+            formatted_parts.append(
+                f"<{part.replace('control', 'ctrl')}>"
+            )  # Normalize control
         else:
-            print("Camera activated")
-
-        self.camera.camera_active = not self.camera.camera_active
-
-        self.osd.update()  # Update OSD when camera state changes
-
-        if self.icon:
-            self.icon.menu = pystray.Menu(*self._get_menu_items())
-
-    def _toggle_mic(self):
-        self.mic.toggle()
-        # Update OSD when mic state changes
-        self.osd.update()
-
-        if self.icon:
-            self.icon.menu = pystray.Menu(*self._get_menu_items())
-
-    def _process_queue(self):
-        # Process all pending actions in the queue
-        while not self.action_queue.empty():
-            action = self.action_queue.get()
-            action()
+            formatted_parts.append(
+                part_original.lower()
+            )  # pynput usually takes lowercase for char keys
+    return "+".join(formatted_parts)
 
 
+def setup_hotkeys():  # (Modified to include camera hotkey)
+    global hotkey_listener
+    if not config:
+        logger.error("Config not loaded. Cannot set up hotkeys.")
+        return
+
+    camera_hotkey_str = format_hotkey_for_pynput(config.camera_hotkey)
+    mic_hotkey_str = format_hotkey_for_pynput(config.mic_hotkey)
+
+    hotkey_actions = {}
+    if camera_hotkey_str:
+        hotkey_actions[camera_hotkey_str] = on_camera_hotkey_press
+        logger.info(
+            f"Registered Camera Hotkey: {config.camera_hotkey} -> {camera_hotkey_str}"
+        )
+    else:
+        logger.warning(
+            f"Camera hotkey '{config.camera_hotkey}' invalid or not defined."
+        )
+
+    if mic_hotkey_str:
+        hotkey_actions[mic_hotkey_str] = on_mic_hotkey_press
+        logger.info(f"Registered Mic Hotkey: {config.mic_hotkey} -> {mic_hotkey_str}")
+    else:
+        logger.warning(f"Mic hotkey '{config.mic_hotkey}' invalid or not defined.")
+
+    if not hotkey_actions:
+        logger.warning("No valid hotkeys configured.")
+        return
+
+    try:
+        hotkey_listener = keyboard.GlobalHotKeys(hotkey_actions)
+        hotkey_listener.start()  # Runs in its own thread
+        logger.info("Hotkey listener started.")
+    except Exception as e:
+        logger.error(f"Failed to start hotkey listener: {e}", exc_info=True)
+
+
+# --- System Tray Icon Functions ---
+def get_tray_icon_image():
+    icon_path = resource_path("resources/logo.png")
+    try:
+        image = Image.open(icon_path)
+    except FileNotFoundError:
+        logger.warning(f"Tray icon '{icon_path}' not found. Creating placeholder.")
+        image = Image.new("RGB", (64, 64), "blue")
+        ImageDraw.Draw(image).text((10, 25), "VCM", fill="white")
+    except Exception as e:
+        logger.error(f"Error loading tray icon: {e}. Using placeholder.", exc_info=True)
+        image = Image.new("RGB", (64, 64), "grey")  # Different placeholder on error
+    return image
+
+
+def on_quit_vcm(icon, item_or_event=None):
+    logger.info("Exit selected. Shutting down VCM...")
+
+    # Stop Camera Manager first
+    if camera_manager:
+        logger.info("Stopping camera manager...")
+        camera_manager.stop()  # This will signal its thread and join
+
+    if hotkey_listener:
+        # ... (stop hotkey_listener)
+        logger.info("Stopping hotkey listener...")
+        try:
+            hotkey_listener.stop()
+        except Exception as e:
+            logger.error(f"Error stopping hotkey listener: {e}", exc_info=True)
+
+    if osd_manager:
+        # ... (close osd_manager)
+        logger.info("Closing OSD manager...")
+        osd_manager.close()
+
+    if tray_icon_instance:
+        # ... (stop tray_icon_instance)
+        logger.info("Stopping tray icon...")
+        try:
+            tray_icon_instance.stop()
+        except Exception as e:
+            logger.error(f"Error stopping tray icon: {e}", exc_info=True)
+
+    logger.info("Setting exit event for main thread.")
+    exit_event.set()
+
+
+def setup_tray_icon():
+    global tray_icon_instance
+    image = get_tray_icon_image()
+    menu = (item("Exit VCM", on_quit_vcm),)
+    tray_icon_instance = pystray.Icon("VCM", image, "VCM - Video Conference Mute", menu)
+
+    def run_tray():
+        logger.info("Tray icon thread started.")
+        try:
+            tray_icon_instance.run()
+        finally:
+            logger.info("Tray icon thread finished.")
+            # If tray finishes unexpectedly, it might be good to trigger a shutdown
+            if not exit_event.is_set():
+                logger.warning("Tray icon stopped unexpectedly. Initiating shutdown.")
+                on_quit_vcm(tray_icon_instance)  # Pass icon for consistency
+
+    tray_thread = threading.Thread(target=run_tray, daemon=True, name="TrayIconThread")
+    tray_thread.start()
+
+
+# --- Main Application Logic ---
 def main():
-    vcm = VCM()
-    vcm.start()
-    sys.exit(0)
+    global osd_manager, camera_manager  # Ensure camera_manager is global for on_quit_vcm
+
+    # ... (load_configuration, setup OSD)
+    load_configuration()
+
+    osd_manager = OSDDisplay(config)
+    osd_manager.start()
+
+    # Initialize and start the Camera Manager
+    camera_manager = CameraManager(config)  # Pass the config object
+    camera_manager.start()
+
+    # ... (setup_hotkeys, setup_tray_icon)
+    setup_hotkeys()
+    setup_tray_icon()
+
+    logger.info("VCM application is running. Main thread waiting for exit signal.")
+    try:
+        exit_event.wait()
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt received in main thread. Shutting down...")
+        on_quit_vcm(None)
+    finally:
+        logger.info("Main thread exiting.")
 
 
 if __name__ == "__main__":
