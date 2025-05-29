@@ -4,15 +4,7 @@ from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL, CoInitialize, CoUninitialize, COMError
 
 # It's good practice to ensure COM is initialized in threads that use COM objects.
-# pycaw interacts with COM. While comtypes might handle some of this,
-# explicit initialization can prevent threading issues.
-# These are helper functions for managing COM initialization per call if needed,
-# though for simplicity in the main functions below, we'll rely on pycaw/comtypes'
-# default behavior or assume the calling thread context is managed.
-# If you encounter "python.exe has stopped working" or COM-related errors,
-# especially in multithreaded scenarios (like hotkey callbacks),
-# uncommenting and using com_initialize/com_uninitialize around pycaw calls
-# in the functions below might be necessary.
+# pycaw interacts with COM.
 
 
 def com_initialize():
