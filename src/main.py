@@ -252,7 +252,6 @@ def on_quit_vcm(icon, item_or_event=None):
         camera_manager.stop()  # This will signal its thread and join
 
     if hotkey_listener:
-        # ... (stop hotkey_listener)
         logger.info("Stopping hotkey listener...")
         try:
             hotkey_listener.stop()
@@ -260,12 +259,10 @@ def on_quit_vcm(icon, item_or_event=None):
             logger.error(f"Error stopping hotkey listener: {e}", exc_info=True)
 
     if osd_manager:
-        # ... (close osd_manager)
         logger.info("Closing OSD manager...")
         osd_manager.close()
 
     if tray_icon_instance:
-        # ... (stop tray_icon_instance)
         logger.info("Stopping tray icon...")
         try:
             tray_icon_instance.stop()
@@ -299,19 +296,17 @@ def setup_tray_icon():
 
 # --- Main Application Logic ---
 def main():
-    global osd_manager, camera_manager  # Ensure camera_manager is global for on_quit_vcm
+    global osd_manager, camera_manager
 
-    # ... (load_configuration, setup OSD)
     load_configuration()
 
     osd_manager = OSDDisplay(config)
     osd_manager.start()
 
     # Initialize and start the Camera Manager
-    camera_manager = CameraManager(config)  # Pass the config object
+    camera_manager = CameraManager(config)
     camera_manager.start()
 
-    # ... (setup_hotkeys, setup_tray_icon)
     setup_hotkeys()
     setup_tray_icon()
 

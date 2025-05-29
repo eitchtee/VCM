@@ -1,10 +1,10 @@
-# microphone.py
 import logging
 from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL, CoInitialize, CoUninitialize, COMError
 
-# It's good practice to ensure COM is initialized in threads that use COM objects.
-# pycaw interacts with COM.
+from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+
+# It's good practice to ensure COM is initialized in threads that use COM objects. pycaw interacts with COM.
 
 
 def com_initialize():
@@ -29,11 +29,11 @@ def _get_volume_interface():
     Returns:
         POINTER(IAudioEndpointVolume) or None: The volume interface, or None on error.
     """
-    com_initialize()
-    volume_interface = None
+    com_initialized_successfully = False
+
     try:
-        # Import pycaw components here to allow graceful failure if pycaw is missing
-        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+        com_initialize()
+        com_initialized_successfully = True
 
         devices = (
             AudioUtilities.GetMicrophone()
@@ -45,11 +45,6 @@ def _get_volume_interface():
         interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
         volume_interface = cast(interface, POINTER(IAudioEndpointVolume))
         return volume_interface
-    except ImportError:
-        logger.error(
-            "pycaw library not found. Microphone control will not be available."
-        )
-        return None
     except COMError as e:
         # Common COM errors include device not found or access issues.
         logger.error(
@@ -65,10 +60,8 @@ def _get_volume_interface():
             f"Unexpected error getting microphone volume interface: {e}", exc_info=True
         )
         return None
-    finally:  # Uncomment if explicit COM management per call is needed
-        if (
-            volume_interface is not None
-        ):  # Only uninitialize if we potentially succeeded partially
+    finally:
+        if com_initialized_successfully:
             com_uninitialize()
 
 
