@@ -1,0 +1,16 @@
+[project]
+name = "vcm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "comtypes~=1.4.11",
+    "numpy~=2.2.3",
+    "opencv-python~=4.11.0.86",
+    "pillow~=11.2.1",
+    "pycaw==20240210",
+    "pynput~=1.8.1",
+    "pystray~=0.19.5",
+    "pyyaml~=6.0.2",
+]
