@@ -36,12 +36,12 @@ class ConfigReader:
         self._load_config()
 
         # Set attributes directly for easier access
-        self.camera_hotkey = self.get("camera_hotkey")
-        self.mic_hotkey = self.get("mic_hotkey")
-        self.camera_id = self.get("camera_id")
-        self.camera_width = self.get("camera_width")
-        self.camera_height = self.get("camera_height")
-        self.camera_fps = self.get("camera_fps")
+        self.camera_hotkey = self.get("camera_hotkey", "<cmd>+<shift>+a")
+        self.mic_hotkey = self.get("mic_hotkey", "<cmd>+<shift>+o")
+        self.camera_id = self.get("camera_id", 0)
+        self.camera_width = self.get("camera_width", 1280)
+        self.camera_height = self.get("camera_height", 720)
+        self.camera_fps = self.get("camera_fps", 30)
         self.camera_status = False
 
         logger.info("Attempting to get initial microphone status for config...")
@@ -94,12 +94,12 @@ class ConfigReader:
             self._config_file_path = config_file_path
         # Reset specific attributes
         self._load_config()
-        self.camera_hotkey = self.get("camera_hotkey")
-        self.mic_hotkey = self.get("mic_hotkey")
-        self.camera_id = self.get("camera_id")
-        self.camera_width = self.get("camera_width")
-        self.camera_height = self.get("camera_height")
-        self.camera_fps = self.get("camera_fps")
+        self.camera_hotkey = self.get("camera_hotkey", "<cmd>+<shift>+a")
+        self.mic_hotkey = self.get("mic_hotkey", "<cmd>+<shift>+o")
+        self.camera_id = self.get("camera_id", 0)
+        self.camera_width = self.get("camera_width", 1280)
+        self.camera_height = self.get("camera_height", 720)
+        self.camera_fps = self.get("camera_fps", 30)
         # Or re-run the dynamic attribute setting if you chose that path
 
     def __str__(self):
