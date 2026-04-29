@@ -21,7 +21,13 @@ a = Analysis(
     datas=[
         ('src/resources/', './resources/'), # Bundles the resources folder
     ],
-    hiddenimports=[],
+    hiddenimports=[
+        'pynput',
+        'pynput.keyboard',
+        'pynput.keyboard._win32',
+        'pynput._util',
+        'pynput._util.win32',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
