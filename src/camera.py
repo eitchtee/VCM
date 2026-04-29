@@ -26,12 +26,15 @@ class CameraManager:
             (self.target_height, self.target_width, 3), dtype=np.uint8
         )
         self.last_connection_status = False
+        self._last_setup_attempt_time = 0
+        self._setup_retry_interval = 3.0  # seconds to wait between re-open attempts
 
     def _setup_physical_camera(self):
         self.logger.info(
             f"Attempting to open physical camera (ID: {self.cam_id}) "
             f"with target {self.target_width}x{self.target_height}@{self.target_fps}fps."
         )
+        vc = None
         try:
             vc = cv2.VideoCapture(self.cam_id, cv2.CAP_DSHOW)
             if not vc.isOpened():  # Try without CAP_DSHOW if initial open fails
@@ -46,12 +49,17 @@ class CameraManager:
                 )
                 return None
 
-            # Attempt to set desired properties
-            vc.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-            vc.set(cv2.CAP_PROP_FRAME_WIDTH, self.target_width)
-            vc.set(cv2.CAP_PROP_FRAME_HEIGHT, self.target_height)
-            vc.set(cv2.CAP_PROP_FPS, self.target_fps)
-            vc.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Small buffer for low latency
+            # Attempt to set desired properties (best-effort, non-fatal)
+            try:
+                vc.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                vc.set(cv2.CAP_PROP_FRAME_WIDTH, self.target_width)
+                vc.set(cv2.CAP_PROP_FRAME_HEIGHT, self.target_height)
+                vc.set(cv2.CAP_PROP_FPS, self.target_fps)
+                vc.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Small buffer for low latency
+            except Exception as e_prop:
+                self.logger.warning(
+                    f"Could not set camera properties (camera still usable): {e_prop}"
+                )
 
             actual_width = int(vc.get(cv2.CAP_PROP_FRAME_WIDTH))
             actual_height = int(vc.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -71,21 +79,24 @@ class CameraManager:
             self.logger.error(
                 f"Exception setting up physical camera: {e}", exc_info=True
             )
-            if vc and vc.isOpened():
-                vc.release()
+            if vc is not None:
+                try:
+                    vc.release()
+                except Exception:
+                    pass
             return None
 
     def _release_physical_camera(self):
-        if self.physical_cam_cv2 and self.physical_cam_cv2.isOpened():
+        if self.physical_cam_cv2 is not None:
             self.logger.info("Releasing physical camera.")
             try:
                 self.physical_cam_cv2.release()
-                time.sleep(1)
             except Exception as e:
                 self.logger.error(
                     f"Error releasing physical camera: {e}", exc_info=True
                 )
-        self.physical_cam_cv2 = None
+            self.physical_cam_cv2 = None
+            time.sleep(2)  # Give the OS/DirectShow time to fully free the device
 
     def _camera_feed_loop(self):
         self.logger.info("Camera feed loop thread started.")
@@ -151,7 +162,11 @@ class CameraManager:
                         not self.physical_cam_cv2
                         or not self.physical_cam_cv2.isOpened()
                     ):
-                        self.physical_cam_cv2 = self._setup_physical_camera()
+                        now = time.perf_counter()
+                        if now - self._last_setup_attempt_time >= self._setup_retry_interval:
+                            self._last_setup_attempt_time = now
+                            self.physical_cam_cv2 = self._setup_physical_camera()
+                        # else: still in cooldown, will send black frame below
 
                     if self.physical_cam_cv2:
                         ret, frame = self.physical_cam_cv2.read()
