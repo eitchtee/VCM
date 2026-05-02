@@ -4,3 +4,12 @@ camera_id: 0 # Typically 0 for the default camera
 camera_width: 1280
 camera_height: 720
 camera_fps: 30
+
+# Optional camera recovery tuning for devices that are slow to reopen after mute.
+camera_setup_retry_interval: 3.0
+camera_warmup_timeout: 2.0
+camera_read_failure_threshold: 3
+
+# Compatibility mode: keep the physical camera open while VCM camera is muted.
+# This can help webcam drivers that fail after release/reopen cycles.
+camera_keep_open_when_muted: false

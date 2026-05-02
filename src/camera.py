@@ -26,65 +26,245 @@ class CameraManager:
             (self.target_height, self.target_width, 3), dtype=np.uint8
         )
         self.last_connection_status = False
-        self._last_setup_attempt_time = 0
-        self._setup_retry_interval = 3.0  # seconds to wait between re-open attempts
+        self._setup_retry_interval = self._config_value(
+            "camera_setup_retry_interval", 3.0
+        )
+        self._last_setup_attempt_time = -self._setup_retry_interval
+        self._camera_warmup_timeout = self._config_value("camera_warmup_timeout", 2.0)
+        self._camera_warmup_sleep = 0.1
+        self._read_failure_count = 0
+        self._read_failure_release_threshold = self._config_value(
+            "camera_read_failure_threshold", 3
+        )
+        self._keep_camera_open_when_muted = bool(
+            self._config_value("camera_keep_open_when_muted", False)
+        )
+        self._camera_unavailable_log_interval = 5.0
+        self._last_unavailable_log_time = -self._camera_unavailable_log_interval
+        self._last_camera_active = self.config.camera_active
+
+    def _config_value(self, key, default):
+        getter = getattr(self.config, "get", None)
+        if callable(getter):
+            return getter(key, getattr(self.config, key, default))
+        return getattr(self.config, key, default)
 
     def _setup_physical_camera(self):
         self.logger.info(
             f"Attempting to open physical camera (ID: {self.cam_id}) "
             f"with target {self.target_width}x{self.target_height}@{self.target_fps}fps."
         )
-        vc = None
-        try:
-            vc = cv2.VideoCapture(self.cam_id, cv2.CAP_DSHOW)
-            if not vc.isOpened():  # Try without CAP_DSHOW if initial open fails
-                self.logger.warning(
-                    "Failed to open with CAP_DSHOW, trying default backend."
-                )
-                vc = cv2.VideoCapture(self.cam_id)
+        last_failure = None
 
-            if not vc.isOpened():
-                self.logger.error(
-                    f"Could not open physical video source (ID: {self.cam_id}) with any backend."
-                )
-                return None
-
-            # Attempt to set desired properties (best-effort, non-fatal)
+        for backend_name, capture_args in self._camera_backend_attempts():
+            vc = None
             try:
-                vc.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-                vc.set(cv2.CAP_PROP_FRAME_WIDTH, self.target_width)
-                vc.set(cv2.CAP_PROP_FRAME_HEIGHT, self.target_height)
-                vc.set(cv2.CAP_PROP_FPS, self.target_fps)
-                vc.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Small buffer for low latency
-            except Exception as e_prop:
-                self.logger.warning(
-                    f"Could not set camera properties (camera still usable): {e_prop}"
+                self.logger.debug(
+                    f"Opening physical camera with {backend_name} backend."
                 )
-
-            actual_width = int(vc.get(cv2.CAP_PROP_FRAME_WIDTH))
-            actual_height = int(vc.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            actual_fps = vc.get(cv2.CAP_PROP_FPS)  # Can be 0 if not supported
-
-            self.logger.info(
-                f"Physical camera opened. Actual W: {actual_width}, H: {actual_height}, FPS: {actual_fps if actual_fps > 0 else 'N/A'}"
-            )
-
-            if actual_width != self.target_width or actual_height != self.target_height:
+                vc = cv2.VideoCapture(*capture_args)
+            except Exception as e:
+                last_failure = f"{backend_name} open exception: {e}"
                 self.logger.warning(
-                    f"Resolution mismatch: Requested {self.target_width}x{self.target_height}, "
-                    f"got {actual_width}x{actual_height}. Frames will be resized."
+                    f"Exception opening physical camera with {backend_name} backend: {e}",
+                    exc_info=True,
                 )
+                continue
+
+            if not self._is_capture_opened(vc, backend_name):
+                last_failure = f"{backend_name} backend did not open"
+                self.logger.warning(
+                    f"Failed to open physical camera with {backend_name} backend."
+                )
+                self._release_capture(vc, backend_name)
+                continue
+
+            self._apply_camera_properties(vc, backend_name)
+            self._log_camera_properties(vc, backend_name)
+
+            if not self._wait_for_first_frame(vc, backend_name):
+                last_failure = f"{backend_name} backend opened but produced no frame"
+                self._release_capture(vc, backend_name)
+                continue
+
+            self._read_failure_count = 0
+            self._last_unavailable_log_time = -self._camera_unavailable_log_interval
             return vc
+
+        self.logger.error(
+            f"Could not open physical video source (ID: {self.cam_id}) with any backend. "
+            f"Last failure: {last_failure or 'unknown'}."
+        )
+        return None
+
+    def _camera_backend_attempts(self):
+        return (
+            ("DirectShow", (self.cam_id, cv2.CAP_DSHOW)),
+            ("default", (self.cam_id,)),
+        )
+
+    def _is_capture_opened(self, vc, backend_name):
+        try:
+            return vc is not None and vc.isOpened()
         except Exception as e:
-            self.logger.error(
-                f"Exception setting up physical camera: {e}", exc_info=True
+            self.logger.warning(
+                f"Exception checking whether {backend_name} camera backend opened: {e}",
+                exc_info=True,
             )
-            if vc is not None:
-                try:
-                    vc.release()
-                except Exception:
-                    pass
+            return False
+
+    def _apply_camera_properties(self, vc, backend_name):
+        properties = (
+            ("FOURCC", cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG")),
+            ("FRAME_WIDTH", cv2.CAP_PROP_FRAME_WIDTH, self.target_width),
+            ("FRAME_HEIGHT", cv2.CAP_PROP_FRAME_HEIGHT, self.target_height),
+            ("FPS", cv2.CAP_PROP_FPS, self.target_fps),
+            ("BUFFERSIZE", cv2.CAP_PROP_BUFFERSIZE, 1),
+        )
+
+        for property_name, property_id, value in properties:
+            try:
+                accepted = vc.set(property_id, value)
+            except Exception as e:
+                self.logger.warning(
+                    f"Could not set camera property {property_name} via "
+                    f"{backend_name} backend (camera may still be usable): {e}"
+                )
+                continue
+
+            if accepted is False:
+                self.logger.debug(
+                    f"Camera property {property_name} was not accepted by "
+                    f"{backend_name} backend."
+                )
+
+    def _log_camera_properties(self, vc, backend_name):
+        actual_width = int(
+            self._get_camera_property(
+                vc, cv2.CAP_PROP_FRAME_WIDTH, "FRAME_WIDTH", backend_name
+            )
+        )
+        actual_height = int(
+            self._get_camera_property(
+                vc, cv2.CAP_PROP_FRAME_HEIGHT, "FRAME_HEIGHT", backend_name
+            )
+        )
+        actual_fps = self._get_camera_property(
+            vc, cv2.CAP_PROP_FPS, "FPS", backend_name
+        )
+
+        self.logger.info(
+            f"Physical camera opened with {backend_name} backend. Actual W: {actual_width}, "
+            f"H: {actual_height}, FPS: {actual_fps if actual_fps > 0 else 'N/A'}"
+        )
+
+        if actual_width != self.target_width or actual_height != self.target_height:
+            self.logger.warning(
+                f"Resolution mismatch on {backend_name} backend: Requested "
+                f"{self.target_width}x{self.target_height}, got "
+                f"{actual_width}x{actual_height}. Frames will be resized."
+            )
+
+    def _get_camera_property(self, vc, property_id, property_name, backend_name):
+        try:
+            value = vc.get(property_id)
+            return value if value is not None else 0
+        except Exception as e:
+            self.logger.warning(
+                f"Could not read camera property {property_name} via "
+                f"{backend_name} backend: {e}"
+            )
+            return 0
+
+    def _wait_for_first_frame(self, vc, backend_name):
+        started_at = time.perf_counter()
+        deadline = started_at + self._camera_warmup_timeout
+        attempts = 0
+        last_failure = "no read attempted"
+
+        while True:
+            attempts += 1
+            try:
+                ret, frame = vc.read()
+                if ret and frame is not None:
+                    if attempts > 1:
+                        self.logger.info(
+                            f"Physical camera produced first frame via {backend_name} "
+                            f"backend after {attempts} attempts."
+                        )
+                    return True
+                last_failure = f"read returned ret={ret}, frame={'set' if frame is not None else 'None'}"
+            except Exception as e:
+                last_failure = f"read exception: {e}"
+                self.logger.warning(
+                    f"Exception while warming up physical camera via {backend_name} "
+                    f"backend: {e}",
+                    exc_info=True,
+                )
+
+            if time.perf_counter() >= deadline:
+                elapsed = time.perf_counter() - started_at
+                self.logger.warning(
+                    f"Physical camera opened with {backend_name} backend but did not "
+                    f"produce a frame after {attempts} attempts over {elapsed:.1f}s. "
+                    f"Last result: {last_failure}."
+                )
+                return False
+
+            time.sleep(self._camera_warmup_sleep)
+
+    def _release_capture(self, vc, backend_name):
+        if vc is None:
+            return
+        try:
+            vc.release()
+        except Exception as e:
+            self.logger.debug(
+                f"Error releasing {backend_name} capture candidate: {e}",
+                exc_info=True,
+            )
+
+    def _log_camera_unavailable(self):
+        now = time.perf_counter()
+        if now - self._last_unavailable_log_time < self._camera_unavailable_log_interval:
+            return
+        retry_in = max(
+            0.0,
+            self._setup_retry_interval - (now - self._last_setup_attempt_time),
+        )
+        self.logger.error(
+            f"Physical camera not available. Sending black frame. "
+            f"Next setup retry in {retry_in:.1f}s."
+        )
+        self._last_unavailable_log_time = now
+
+    def _read_frame_from_physical_camera(self):
+        try:
+            ret, frame = self.physical_cam_cv2.read()
+        except Exception as e:
+            self._read_failure_count += 1
+            self.logger.warning(
+                f"Exception reading frame from physical camera "
+                f"({self._read_failure_count}/{self._read_failure_release_threshold}): {e}",
+                exc_info=True,
+            )
             return None
+
+        if ret and frame is not None:
+            if self._read_failure_count:
+                self.logger.info(
+                    f"Physical camera recovered after {self._read_failure_count} failed reads."
+                )
+            self._read_failure_count = 0
+            return frame
+
+        self._read_failure_count += 1
+        self.logger.warning(
+            f"Failed to read frame from physical camera "
+            f"({self._read_failure_count}/{self._read_failure_release_threshold}). "
+            "Using black frame."
+        )
+        return None
 
     def _release_physical_camera(self):
         if self.physical_cam_cv2 is not None:
@@ -157,11 +337,27 @@ class CameraManager:
                         continue  # Still not connected, loop again
 
                 # --- Virtual camera IS connected ---
-                if self.config.camera_active:  # Check VCM's camera enable state
+                camera_active_now = self.config.camera_active
+                if camera_active_now != self._last_camera_active:
+                    self.logger.info(
+                        f"VCM camera feed state changed: {'enabled' if camera_active_now else 'disabled'}."
+                    )
+                    if camera_active_now:
+                        self._last_setup_attempt_time = -self._setup_retry_interval
+                        self._last_unavailable_log_time = (
+                            -self._camera_unavailable_log_interval
+                        )
+                    self._last_camera_active = camera_active_now
+
+                if camera_active_now:  # Check VCM's camera enable state
                     if (
                         not self.physical_cam_cv2
-                        or not self.physical_cam_cv2.isOpened()
+                        or not self._is_capture_opened(
+                            self.physical_cam_cv2, "active"
+                        )
                     ):
+                        if self.physical_cam_cv2 is not None:
+                            self._release_physical_camera()
                         now = time.perf_counter()
                         if now - self._last_setup_attempt_time >= self._setup_retry_interval:
                             self._last_setup_attempt_time = now
@@ -169,8 +365,8 @@ class CameraManager:
                         # else: still in cooldown, will send black frame below
 
                     if self.physical_cam_cv2:
-                        ret, frame = self.physical_cam_cv2.read()
-                        if ret and frame is not None:
+                        frame = self._read_frame_from_physical_camera()
+                        if frame is not None:
                             if (
                                 frame.shape[0] != self.target_height
                                 or frame.shape[1] != self.target_width
@@ -179,25 +375,35 @@ class CameraManager:
                                     frame,
                                     (self.target_width, self.target_height),
                                     interpolation=cv2.INTER_LINEAR,
-                                )
+                            )
                             frame_to_send = cv2.flip(frame, 1)  # Horizontal flip
                         else:
-                            self.logger.warning(
-                                "Failed to read frame from physical camera. Using black frame."
-                            )
                             frame_to_send = self.black_frame
-                            self._release_physical_camera()  # Try re-setup next time
+                            if (
+                                self._read_failure_count
+                                >= self._read_failure_release_threshold
+                            ):
+                                self.logger.warning(
+                                    "Releasing physical camera after consecutive read failures."
+                                )
+                                self._release_physical_camera()
                     else:  # Physical camera setup failed
-                        self.logger.error(
-                            "Physical camera not available. Sending black frame."
-                        )
+                        self._log_camera_unavailable()
                         frame_to_send = self.black_frame
                 else:  # VCM's camera is disabled by user
                     if self.physical_cam_cv2:  # Release physical cam if it was active
-                        self.logger.info(
-                            "Camera disabled by VCM config. Releasing physical camera."
-                        )
-                        self._release_physical_camera()
+                        if self._keep_camera_open_when_muted and self._is_capture_opened(
+                            self.physical_cam_cv2, "muted"
+                        ):
+                            self.logger.debug(
+                                "Camera disabled by VCM config. Keeping physical camera open."
+                            )
+                        else:
+                            self.logger.info(
+                                "Camera disabled by VCM config. Releasing physical camera."
+                            )
+                            self._release_physical_camera()
+                    self._read_failure_count = 0
                     frame_to_send = self.black_frame
                     # self.logger.debug("Camera disabled, sending black frame.")
 

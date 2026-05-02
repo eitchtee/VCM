@@ -93,3 +93,34 @@ camera_height: 720
 
 # Desired frames per second for the camera feed
 camera_fps: 30
+
+# Optional recovery tuning for webcams that are slow to reopen after camera mute.
+# Seconds between physical camera reopen attempts.
+camera_setup_retry_interval: 3.0
+
+# Seconds to wait for the camera to produce a first frame after opening.
+camera_warmup_timeout: 2.0
+
+# Consecutive failed reads before VCM releases and reopens the physical camera.
+camera_read_failure_threshold: 3
+
+# Compatibility mode for webcams that fail after release/reopen cycles.
+# When true, VCM keeps the physical camera open while muted and only sends black frames.
+camera_keep_open_when_muted: false
+```
+
+### Camera Reopen Troubleshooting
+
+Some Windows webcam drivers report that the camera opened before they can deliver
+frames, especially after the physical camera has just been released during VCM
+camera mute. VCM now warms up the camera before using it, falls back from the
+DirectShow backend to OpenCV's default backend, and logs which backend/property/read
+step failed.
+
+If unmuting still leaves the virtual camera black, increase
+`camera_warmup_timeout` first, then `camera_setup_retry_interval`, and attach the
+new backend-specific log lines when reporting the issue.
+
+If the issue only happens after using the VCM camera mute hotkey, set
+`camera_keep_open_when_muted: true`. This uses more webcam resources while muted,
+but avoids the release/reopen cycle entirely during an active call.
