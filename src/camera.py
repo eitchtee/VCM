@@ -39,6 +39,7 @@ class CameraManager:
         self._keep_camera_open_when_muted = bool(
             self._config_value("camera_keep_open_when_muted", False)
         )
+        self._mirror_camera = bool(self._config_value("mirror_camera", True))
         self._camera_unavailable_log_interval = 5.0
         self._last_unavailable_log_time = -self._camera_unavailable_log_interval
         self._last_camera_active = self.config.camera_active
@@ -288,7 +289,8 @@ class CameraManager:
                 self.target_fps,
             )
             self.logger.info(
-                f"Virtual camera initialized: {self.target_width}x{self.target_height} @ {self.target_fps} FPS"
+                f"Virtual camera initialized: {self.target_width}x{self.target_height} @ {self.target_fps} FPS. "
+                f"Mirroring: {'on' if self._mirror_camera else 'off'}."
             )
         except Exception as e:
             self.logger.error(
@@ -376,7 +378,9 @@ class CameraManager:
                                     (self.target_width, self.target_height),
                                     interpolation=cv2.INTER_LINEAR,
                             )
-                            frame_to_send = cv2.flip(frame, 1)  # Horizontal flip
+                            frame_to_send = (
+                                cv2.flip(frame, 1) if self._mirror_camera else frame
+                            )
                         else:
                             frame_to_send = self.black_frame
                             if (

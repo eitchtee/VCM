@@ -94,6 +94,11 @@ camera_height: 720
 # Desired frames per second for the camera feed
 camera_fps: 30
 
+# Mirror (horizontally flip) the camera feed sent to the virtual camera.
+# Note that most conferencing apps already mirror your own self-preview, so
+# leaving this on means remote participants see you mirrored (text reads backwards).
+mirror_camera: true
+
 # Optional recovery tuning for webcams that are slow to reopen after camera mute.
 # Seconds between physical camera reopen attempts.
 camera_setup_retry_interval: 3.0
@@ -124,3 +129,10 @@ new backend-specific log lines when reporting the issue.
 If the issue only happens after using the VCM camera mute hotkey, set
 `camera_keep_open_when_muted: true`. This uses more webcam resources while muted,
 but avoids the release/reopen cycle entirely during an active call.
+
+### Mirrored Video
+
+VCM mirrors the feed it sends to the virtual camera by default (`mirror_camera: true`).
+Conferencing apps such as Meet, Zoom and Teams already mirror your *own* self-preview,
+so with mirroring on the people on the other end see you flipped, and anything you hold
+up to the camera reads backwards. Set `mirror_camera: false` to send the feed unmirrored.

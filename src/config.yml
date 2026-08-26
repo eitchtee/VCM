@@ -5,6 +5,11 @@ camera_width: 1280
 camera_height: 720
 camera_fps: 30
 
+# Mirror (horizontally flip) the camera feed sent to the virtual camera.
+# Note that most conferencing apps already mirror your own self-preview, so
+# leaving this on means remote participants see you mirrored (text reads backwards).
+mirror_camera: true
+
 # Optional camera recovery tuning for devices that are slow to reopen after mute.
 camera_setup_retry_interval: 3.0
 camera_warmup_timeout: 2.0
