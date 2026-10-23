@@ -109,6 +109,10 @@ camera_warmup_timeout: 2.0
 # Consecutive failed reads before VCM releases and reopens the physical camera.
 camera_read_failure_threshold: 3
 
+# Seconds to wait after releasing the physical camera before reopening it, so the
+# driver has time to fully free the device.
+camera_release_settle_interval: 2.0
+
 # Compatibility mode for webcams that fail after release/reopen cycles.
 # When true, VCM keeps the physical camera open while muted and only sends black frames.
 camera_keep_open_when_muted: false
@@ -123,7 +127,8 @@ DirectShow backend to OpenCV's default backend, and logs which backend/property/
 step failed.
 
 If unmuting still leaves the virtual camera black, increase
-`camera_warmup_timeout` first, then `camera_setup_retry_interval`, and attach the
+`camera_warmup_timeout` first, then `camera_setup_retry_interval` or
+`camera_release_settle_interval`, and attach the
 new backend-specific log lines when reporting the issue.
 
 If the issue only happens after using the VCM camera mute hotkey, set

@@ -15,6 +15,10 @@ camera_setup_retry_interval: 3.0
 camera_warmup_timeout: 2.0
 camera_read_failure_threshold: 3
 
+# Seconds to wait after releasing the physical camera before reopening it, so the
+# driver has time to fully free the device.
+camera_release_settle_interval: 2.0
+
 # Compatibility mode: keep the physical camera open while VCM camera is muted.
 # This can help webcam drivers that fail after release/reopen cycles.
 camera_keep_open_when_muted: false

@@ -39,6 +39,13 @@ class CameraManager:
         self._keep_camera_open_when_muted = bool(
             self._config_value("camera_keep_open_when_muted", False)
         )
+        # How long the OS/DirectShow needs to fully free a released device before
+        # we try to reopen it. Tracked as a deadline instead of a sleep so the
+        # feed loop keeps sending frames to the virtual camera meanwhile.
+        self._release_settle_interval = self._config_value(
+            "camera_release_settle_interval", 2.0
+        )
+        self._reopen_not_before = -1.0
         self._mirror_camera = bool(self._config_value("mirror_camera", True))
         self._camera_unavailable_log_interval = 5.0
         self._last_unavailable_log_time = -self._camera_unavailable_log_interval
@@ -277,7 +284,10 @@ class CameraManager:
                     f"Error releasing physical camera: {e}", exc_info=True
                 )
             self.physical_cam_cv2 = None
-            time.sleep(2)  # Give the OS/DirectShow time to fully free the device
+            # Give the OS/DirectShow time to fully free the device before reopening.
+            self._reopen_not_before = (
+                time.perf_counter() + self._release_settle_interval
+            )
 
     def _camera_feed_loop(self):
         self.logger.info("Camera feed loop thread started.")
@@ -313,6 +323,11 @@ class CameraManager:
                         f"Virtual camera connection status changed: {'Connected' if is_connected_now else 'Disconnected'}"
                     )
                     self.last_connection_status = is_connected_now
+                    # Softcam keeps the last sent frame in shared memory and serves it
+                    # to the next consumer until a new frame arrives. Overwrite it with
+                    # black on every transition so a stale image never reappears while
+                    # the physical camera is being (re)opened.
+                    self.virtual_cam_softcam.send_frame(self.black_frame)
 
                 if not is_connected_now:
                     if self.physical_cam_cv2:  # If physical cam was open, release it
@@ -361,7 +376,11 @@ class CameraManager:
                         if self.physical_cam_cv2 is not None:
                             self._release_physical_camera()
                         now = time.perf_counter()
-                        if now - self._last_setup_attempt_time >= self._setup_retry_interval:
+                        if (
+                            now - self._last_setup_attempt_time
+                            >= self._setup_retry_interval
+                            and now >= self._reopen_not_before
+                        ):
                             self._last_setup_attempt_time = now
                             self.physical_cam_cv2 = self._setup_physical_camera()
                         # else: still in cooldown, will send black frame below
@@ -377,7 +396,7 @@ class CameraManager:
                                     frame,
                                     (self.target_width, self.target_height),
                                     interpolation=cv2.INTER_LINEAR,
-                            )
+                                )
                             frame_to_send = (
                                 cv2.flip(frame, 1) if self._mirror_camera else frame
                             )
