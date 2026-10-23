@@ -110,15 +110,17 @@ jobs:
       run: |
         $VERSION = "${{ steps.get_version.outputs.VERSION }}"
         $ARCHIVE_CONTENT_PATH = "${{ steps.prep_archive.outputs.ARCHIVE_CONTENT_PATH }}"
-        $ZIP_FILE_NAME = "VCM/dist/VCM-${VERSION}-x64.zip" # Output zip to dist/
-        
+        $ZIP_FILE_PATH = Join-Path $PWD "dist/VCM-${VERSION}-x64.zip"
+
+        New-Item -ItemType Directory -Force -Path (Split-Path $ZIP_FILE_PATH) | Out-Null
+
         # Powershell's Compress-Archive creates a top-level folder in the zip from the source.
         # To get the desired structure (contents of $ARCHIVE_CONTENT_PATH directly at zip root):
         Push-Location $ARCHIVE_CONTENT_PATH
-        Compress-Archive -Path "./*" -DestinationPath "../../$ZIP_FILE_NAME" -Force # Go up two levels to place zip in dist/
+        Compress-Archive -Path "./*" -DestinationPath $ZIP_FILE_PATH -Force
         Pop-Location
-        
-        Write-Host "Created $ZIP_FILE_NAME"
+
+        Write-Host "Created $ZIP_FILE_PATH"
       shell: pwsh
 
     - name: Check if release exists
@@ -127,8 +129,8 @@ jobs:
       uses: actions/github-script@v7
       with:
         script: |
+          const tag = '${{ steps.get_version.outputs.TAG }}';
           try {
-            const tag = '${{ steps.get_version.outputs.TAG }}';
             const release = await github.rest.repos.getReleaseByTag({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -145,7 +147,7 @@ jobs:
 
     - name: Delete existing assets if override requested
       if: github.event_name == 'workflow_dispatch' && github.event.inputs.override_assets == 'true' && steps.check_release.outputs.exists == 'true'
-      uses: actions/github-script@v6
+      uses: actions/github-script@v7
       with:
         script: |
           const releaseId = '${{ steps.check_release.outputs.result }}';
