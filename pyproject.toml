@@ -1,7 +1,7 @@
 [project]
 name = "vcm"
-version = "0.1.0"
-description = "Add your description here"
+version = "1.0.0"  # keep in sync with src/version.py (rewritten by CI on release)
+description = "Global hotkeys to mute the microphone and blank the camera feed on Windows"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
