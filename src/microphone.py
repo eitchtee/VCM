@@ -22,19 +22,14 @@ def com_uninitialize():
 logger = logging.getLogger(__name__)
 
 
-def _get_volume_interface():
+def _open_volume_interface():
     """
     Retrieves the IAudioEndpointVolume interface for the default microphone.
-    Manages COM initialization for the call.
+    COM must already be initialized on the calling thread.
     Returns:
         POINTER(IAudioEndpointVolume) or None: The volume interface, or None on error.
     """
-    com_initialized_successfully = False
-
     try:
-        com_initialize()
-        com_initialized_successfully = True
-
         devices = (
             AudioUtilities.GetMicrophone()
         )  # Gets the default communications microphone
@@ -43,8 +38,7 @@ def _get_volume_interface():
             return None
 
         interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-        volume_interface = cast(interface, POINTER(IAudioEndpointVolume))
-        return volume_interface
+        return cast(interface, POINTER(IAudioEndpointVolume))
     except COMError as e:
         # Common COM errors include device not found or access issues.
         logger.error(
@@ -60,9 +54,30 @@ def _get_volume_interface():
             f"Unexpected error getting microphone volume interface: {e}", exc_info=True
         )
         return None
+
+
+def _with_volume(action, default, description):
+    """
+    Runs `action(volume_interface)` with COM initialized for the whole call and the
+    interface released before COM is torn down again. Returns `default` if the
+    interface is unavailable or the action raises.
+    """
+    com_initialize()
+    try:
+        volume = _open_volume_interface()
+        if volume is None:
+            logger.warning(f"Cannot {description}: volume interface is not available.")
+            return default
+        try:
+            return action(volume)
+        except Exception as e:
+            logger.error(f"Error trying to {description}: {e}", exc_info=True)
+            return default
+        finally:
+            # Drop the interface reference while COM is still initialized.
+            del volume
     finally:
-        if com_initialized_successfully:
-            com_uninitialize()
+        com_uninitialize()
 
 
 def get_mic_status():
@@ -71,22 +86,14 @@ def get_mic_status():
     Returns:
         bool: True if the microphone is active (unmuted), False if muted or an error occurred.
     """
-    volume = _get_volume_interface()
-    if volume:
-        try:
-            current_mute_status = volume.GetMute()  # 0 means unmuted, 1 means muted
-            logger.debug(
-                f"Raw microphone mute status from system: {current_mute_status}"
-            )
-            return not bool(
-                current_mute_status
-            )  # True if 0 (unmuted), False if 1 (muted)
-        except Exception as e:
-            logger.error(f"Error reading microphone mute status: {e}", exc_info=True)
-            return False  # Default to muted/inactive on error
-    else:
-        logger.warning("Could not get microphone status; volume interface unavailable.")
-        return False  # Assume muted if interface cannot be retrieved
+
+    def read(volume):
+        current_mute_status = volume.GetMute()  # 0 means unmuted, 1 means muted
+        logger.debug(f"Raw microphone mute status from system: {current_mute_status}")
+        return not bool(current_mute_status)  # True if 0 (unmuted), False if 1 (muted)
+
+    # Default to muted/inactive when the status cannot be determined.
+    return _with_volume(read, False, "read microphone mute status")
 
 
 def set_mic_mute(mute: bool):
@@ -97,20 +104,10 @@ def set_mic_mute(mute: bool):
     Returns:
         bool: True if the operation was successful, False otherwise.
     """
-    volume = _get_volume_interface()
-    if not volume:
-        logger.error(
-            f"Cannot {'mute' if mute else 'unmute'} microphone: volume interface is not available."
-        )
-        return False
-    try:
-        desired_mute_state = 1 if mute else 0
-        volume.SetMute(desired_mute_state, None)
+
+    def write(volume):
+        volume.SetMute(1 if mute else 0, None)
         logger.info(f"Microphone {'muted' if mute else 'unmuted'} successfully.")
         return True
-    except Exception as e:
-        logger.error(
-            f"Error setting microphone mute state to {'mute' if mute else 'unmute'}: {e}",
-            exc_info=True,
-        )
-        return False
+
+    return _with_volume(write, False, f"{'mute' if mute else 'unmute'} the microphone")
