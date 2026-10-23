@@ -5,14 +5,12 @@ import os
 import sys
 import threading
 
-if hasattr(sys, "_MEIPASS"):
-    # Running in a PyInstaller bundle, place logs next to the executable
-    log_dir = os.path.dirname(sys.executable)
-else:
-    # Running as a script, place logs in the script's directory
-    log_dir = os.path.abspath(os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-log_file_path = os.path.join(log_dir, "vcm_app.log")
+from utils.resources import app_dir, resource_path
+
+# Logs live next to the executable when frozen, and in src/ when run from source.
+log_file_path = os.path.join(app_dir(), "vcm_app.log")
 
 # Log rotation parameters
 max_log_size_bytes = 1 * 1024 * 1024  # 1 MB per log file
@@ -71,12 +69,13 @@ rotating_file_handler.setFormatter(log_formatter)
 # Add the configured rotating file handler to the root logger
 root_logger.addHandler(rotating_file_handler)
 
-# Optional: If you ALSO want console output during development (in addition to the file)
-# uncomment the following lines:
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.DEBUG)  # Set level for console output if different
-console_handler.setFormatter(log_formatter)  # Use the same or a different formatter
-root_logger.addHandler(console_handler)
+# Mirror logs to the console when there is one. A windowed PyInstaller build has
+# no stdout/stderr, so attaching a StreamHandler there would only fail on emit.
+if sys.stdout is not None:
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(log_formatter)
+    root_logger.addHandler(console_handler)
 
 from pynput import keyboard
 from PIL import Image, ImageDraw  # Still needed for pystray
@@ -90,8 +89,6 @@ from microphone import (
 )
 from camera import CameraManager
 from osd import OSDDisplay  # Import the new OSD class
-
-from utils.resources import resource_path
 
 
 logger = logging.getLogger(__name__)  # Get a logger for main.py scope
@@ -122,7 +119,7 @@ def load_configuration():
 
 # --- Hotkey Processing Functions ---
 def on_camera_hotkey_press():
-    """Placeholder for camera hotkey - Toggles config.camera_active."""
+    """Toggles config.camera_active; the camera thread picks the change up."""
     if config is None:
         logger.error("Config not loaded, cannot toggle camera.")
         if osd_manager:
@@ -131,7 +128,7 @@ def on_camera_hotkey_press():
 
     config.camera_active = not config.camera_active
     status_message = "Camera ON" if config.camera_active else "Camera OFF"
-    logger.info(f"Camera hotkey pressed. New placeholder state: {status_message}")
+    logger.info(f"Camera hotkey pressed. New state: {status_message}")
 
     if osd_manager:
         osd_manager.update()  # Trigger OSD update

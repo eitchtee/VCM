@@ -4,6 +4,7 @@ import yaml
 import os
 
 from microphone import get_mic_status
+from utils.resources import app_dir
 
 
 logger = logging.getLogger(__name__)
@@ -25,23 +26,17 @@ class ConfigReader:
         self._initialized = True
 
         # Determine config file path
-        # Priority: provided path > environment variable > default name
+        # Priority: provided path > environment variable > config.yml next to the app
         self._config_file_path = config_file_path
         if self._config_file_path is None:
-            self._config_file_path = os.getenv(
-                "VCM_CONFIG_PATH", self._config_file_name
+            self._config_file_path = os.getenv("VCM_CONFIG_PATH") or os.path.join(
+                app_dir(), self._config_file_name
             )
 
         self.config_data = {}
         self._load_config()
 
-        # Set attributes directly for easier access
-        self.camera_hotkey = self.get("camera_hotkey", "<cmd>+<shift>+a")
-        self.mic_hotkey = self.get("mic_hotkey", "<cmd>+<shift>+o")
-        self.camera_id = self.get("camera_id", 0)
-        self.camera_width = self.get("camera_width", 1280)
-        self.camera_height = self.get("camera_height", 720)
-        self.camera_fps = self.get("camera_fps", 30)
+        self._apply_settings()
         self.camera_status = False
 
         logger.info("Attempting to get initial microphone status for config...")
@@ -67,16 +62,27 @@ class ConfigReader:
                 self.config_data = yaml.safe_load(f)
                 if self.config_data is None:  # Handle empty YAML file
                     self.config_data = {}
-                    print(f"Warning: Config file '{self._config_file_path}' is empty.")
+                    logger.warning(
+                        f"Config file '{self._config_file_path}' is empty."
+                    )
         except FileNotFoundError:
-            print(
-                f"Error: Config file '{self._config_file_path}' not found. Using default/empty values."
+            logger.warning(
+                f"Config file '{self._config_file_path}' not found. Using default values."
             )
             # Initialize with empty dict or default values if file not found
             self.config_data = {}
         except yaml.YAMLError as e:
-            print(f"Error parsing YAML in '{self._config_file_path}': {e}")
+            logger.error(f"Error parsing YAML in '{self._config_file_path}': {e}")
             self.config_data = {}  # Or raise an exception / exit
+
+    def _apply_settings(self):
+        """Mirror the YAML values onto attributes for convenient access."""
+        self.camera_hotkey = self.get("camera_hotkey", "<cmd>+<shift>+a")
+        self.mic_hotkey = self.get("mic_hotkey", "<cmd>+<shift>+o")
+        self.camera_id = self.get("camera_id", 0)
+        self.camera_width = self.get("camera_width", 1280)
+        self.camera_height = self.get("camera_height", 720)
+        self.camera_fps = self.get("camera_fps", 30)
 
     def get(self, key, default=None):
         """
@@ -92,15 +98,8 @@ class ConfigReader:
         """
         if config_file_path:
             self._config_file_path = config_file_path
-        # Reset specific attributes
         self._load_config()
-        self.camera_hotkey = self.get("camera_hotkey", "<cmd>+<shift>+a")
-        self.mic_hotkey = self.get("mic_hotkey", "<cmd>+<shift>+o")
-        self.camera_id = self.get("camera_id", 0)
-        self.camera_width = self.get("camera_width", 1280)
-        self.camera_height = self.get("camera_height", 720)
-        self.camera_fps = self.get("camera_fps", 30)
-        # Or re-run the dynamic attribute setting if you chose that path
+        self._apply_settings()
 
     def __str__(self):
         return f"ConfigReader(file='{self._config_file_path}', data={self.config_data})"
