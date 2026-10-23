@@ -17,6 +17,7 @@ class OSDDisplay:
         self.visible = False
         self.update_queue = Queue()
         self.running = False  # Controls the _check_for_updates loop
+        self._close_requested = threading.Event()
 
         self.bg_color = "#1E1E1E"  # Dark modern background
         self.icon_size = (16, 16)  # Adjusted for slightly better visibility
@@ -103,6 +104,9 @@ class OSDDisplay:
 
     def _run_osd_loop(self):
         logger.info("OSD thread started.")
+        if self._close_requested.is_set():
+            logger.info("OSD close requested before startup finished; not opening.")
+            return
         self.window = tk.Tk()
         self.window.overrideredirect(True)
         self.window.attributes("-topmost", True)
@@ -140,8 +144,12 @@ class OSDDisplay:
         self._perform_update_tasks()
         self._position_window()  # Position once after initial content is set
 
-        self.running = True  # Signal that the update loop can run
+        self.running = not self._close_requested.is_set()
         self._check_for_updates()  # Start update poller
+        if not self.running:
+            # close() ran while we were still building the window.
+            self._do_close_tk_resources()
+            return
 
         logger.info("Starting OSD mainloop.")
         try:
@@ -165,11 +173,6 @@ class OSDDisplay:
         self.window.geometry(f"{width}x{height}+{x}+{y}")
 
     def _check_for_updates(self):
-        if not self.running and self.update_queue.empty():
-            # If not running and queue is empty, we are likely shutting down
-            logger.debug("OSD update loop: Not running and queue empty, stopping.")
-            return
-
         try:
             while not self.update_queue.empty():
                 update_fn = self.update_queue.get_nowait()
@@ -245,10 +248,12 @@ class OSDDisplay:
     def close(self):
         """Signals the OSD to shut down."""
         logger.info("OSD close method called.")
-        self.running = False  # Stop _check_for_updates from re-scheduling
+        self._close_requested.set()
 
         if self.window:
-            # Queue the final close actions to be performed on the Tkinter thread
+            # Queue the final close actions to be performed on the Tkinter thread.
+            # The poller stops rescheduling only once it has run them, so this must
+            # be queued before `running` is cleared or the request would be dropped.
             try:
                 self.update_queue.put(self._do_close_tk_resources, block=False)
             except (
@@ -262,6 +267,8 @@ class OSDDisplay:
                         self.window.destroy()
                     except Exception as e_destroy:
                         logger.error(f"Direct destroy failed: {e_destroy}")
+        else:
+            self.running = False
 
         # Wait for the OSD thread to finish
         if self.thread and self.thread.is_alive():
@@ -269,10 +276,12 @@ class OSDDisplay:
             self.thread.join(timeout=2.0)  # Wait for up to 2 seconds
             if self.thread.is_alive():
                 logger.warning("OSD thread did not terminate in time.")
+        self.running = False
         logger.info("OSD close finished.")
 
     def _do_close_tk_resources(self):
         """Helper to quit and destroy Tkinter resources, called from Tkinter thread."""
+        self.running = False  # Stop _check_for_updates from re-scheduling
         if self.window:
             try:
                 self.window.quit()  # Stops mainloop
